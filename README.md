@@ -1,5 +1,7 @@
 # fathom
 
+[![ci](https://github.com/tunahanaliozturk/fathom/actions/workflows/ci.yml/badge.svg)](https://github.com/tunahanaliozturk/fathom/actions/workflows/ci.yml)
+
 Hybrid search on plain Postgres, with an evaluation harness that fails the build when relevance drops.
 
 Documents go in over HTTP. Each is chunked on sentence boundaries and stored with a full-text index and, a few seconds
