@@ -1,0 +1,72 @@
+# Try these against `docker compose up`, in order. First create a key and paste it below:
+#   docker compose run --rm api keys create --collections '*' --scopes read,write --label laptop
+@base = http://127.0.0.1:8300
+@key = fth_paste_your_key_here
+
+### 1. Write a few documents. 202: stored and searchable by text now; the indexer adds vectors in the background.
+POST {{base}}/v1/collections/landmarks/documents
+Authorization: Bearer {{key}}
+Content-Type: application/json
+
+{"documents": [
+  {"id": "eiffel", "title": "Eiffel Tower", "text": "The tower was designed by the engineer Gustave Eiffel and finished in 1889.", "metadata": {"city": "paris"}},
+  {"id": "colosseum", "title": "Colosseum", "text": "The amphitheatre in Rome held tens of thousands of spectators.", "metadata": {"city": "rome"}},
+  {"id": "louvre", "title": "Louvre", "text": "The Louvre is the most visited museum in the world.", "metadata": {"city": "paris"}}
+]}
+
+### 2. How far the indexer has got. "pending" drops to 0 within a few seconds.
+GET {{base}}/v1/collections/landmarks/stats
+Authorization: Bearer {{key}}
+
+### 3. Hybrid search, with each hit's rank in each retriever. Note that "who" and "built" appear in no document:
+### the text query is an OR of stemmed words, and the vector side matches the meaning.
+POST {{base}}/v1/collections/landmarks/search
+Authorization: Bearer {{key}}
+Content-Type: application/json
+
+{"query": "who built the famous iron tower", "explain": true}
+
+### 4. The same question, one retriever at a time. Compare the orders.
+POST {{base}}/v1/collections/landmarks/search
+Authorization: Bearer {{key}}
+Content-Type: application/json
+
+{"query": "who built the famous iron tower", "mode": "lexical", "explain": true}
+
+###
+POST {{base}}/v1/collections/landmarks/search
+Authorization: Bearer {{key}}
+Content-Type: application/json
+
+{"query": "who built the famous iron tower", "mode": "vector", "explain": true}
+
+### 5. A metadata filter, applied inside both retrievers rather than after them.
+POST {{base}}/v1/collections/landmarks/search
+Authorization: Bearer {{key}}
+Content-Type: application/json
+
+{"query": "famous places to visit", "filter": {"city": "paris"}}
+
+### 6. Edit one document. Only chunks whose text changed are embedded again ("reused_embeddings").
+PUT {{base}}/v1/collections/landmarks/documents/eiffel
+Authorization: Bearer {{key}}
+Content-Type: application/json
+
+{"id": "eiffel", "title": "Eiffel Tower", "text": "The tower was designed by the engineer Gustave Eiffel and finished in 1889. It is 330 metres tall.", "metadata": {"city": "paris"}}
+
+### 7. Send it again unchanged: 200 and "unchanged": true. Nothing is rewritten.
+PUT {{base}}/v1/collections/landmarks/documents/eiffel
+Authorization: Bearer {{key}}
+Content-Type: application/json
+
+{"id": "eiffel", "title": "Eiffel Tower", "text": "The tower was designed by the engineer Gustave Eiffel and finished in 1889. It is 330 metres tall.", "metadata": {"city": "paris"}}
+
+### 8. Delete one.
+DELETE {{base}}/v1/collections/landmarks/documents/colosseum
+Authorization: Bearer {{key}}
+
+### 9. Without a key: 401, as a problem+json body.
+POST {{base}}/v1/collections/landmarks/search
+Content-Type: application/json
+
+{"query": "tower"}

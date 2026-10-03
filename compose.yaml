@@ -1,0 +1,48 @@
+# Local stack: Postgres with pgvector, a one-shot migration, the API, and one indexer.
+# The password below is for this laptop stack only. API keys are created with `fathom keys create` (see README).
+name: fathom
+
+x-fathom: &fathom
+  image: fathom:local
+  environment:
+    FATHOM_DATABASE_URL: postgresql://postgres:postgres@postgres:5432/fathom
+
+services:
+  postgres:
+    image: pgvector/pgvector:0.8.1-pg18
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: fathom
+    volumes:
+      - postgres:/var/lib/postgresql
+    ports: ["127.0.0.1:55435:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d fathom"]
+      interval: 2s
+      retries: 30
+
+  migrate:
+    <<: *fathom
+    build: .
+    command: ["migrate"]
+    depends_on:
+      postgres: {condition: service_healthy}
+
+  api:
+    <<: *fathom
+    ports: ["127.0.0.1:8300:8000"]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/readyz', timeout=2)"]
+      interval: 3s
+      retries: 30
+
+  indexer:
+    <<: *fathom
+    command: ["indexer"]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+
+volumes:
+  postgres:
