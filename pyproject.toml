@@ -1,0 +1,115 @@
+[project]
+name = "fathom"
+version = "0.1.0"
+description = "Hybrid search on plain Postgres, with an evaluation harness that fails the build when relevance drops"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Tunahan Ali Ozturk" }]
+requires-python = ">=3.14"
+dependencies = [
+    "asyncpg>=0.31.0",
+    "fastapi>=0.142.2",
+    "fastembed>=0.8.1",
+    "numpy>=2.5.3",
+    "opentelemetry-api>=1.45.0",
+    "opentelemetry-exporter-otlp-proto-http>=1.45.0",
+    "opentelemetry-sdk>=1.45.0",
+    "pgvector>=0.5.0",
+    "pydantic>=2.13.5",
+    "pydantic-settings>=2.15.0",
+    "structlog>=26.1.0",
+    "uvicorn>=0.54.0",
+]
+
+[project.scripts]
+fathom = "fathom.cli:main"
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+    "hypothesis>=6.168.3",
+    "import-linter>=2.15",
+    "mypy>=2.4.0",
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "ruff>=0.16.10",
+    "testcontainers>=4.15.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/fathom"]
+
+[tool.ruff]
+line-length = 120
+extend-exclude = [".claude"]
+target-version = "py314"
+src = ["src", "tests", "benchmarks"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "B", "A", "C4", "SIM", "RET", "PTH", "ARG", "PL", "RUF", "S", "DTZ", "T20", "ASYNC"]
+ignore = [
+    "N818",     # exceptions are named for what happened, not suffixed with Error
+    "PLR0913",  # search takes its tuning knobs explicitly
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["fathom", "tests", "benchmarks"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "PLR2004", "S105", "S106", "S311", "ARG"]
+"benchmarks/**" = ["S101", "T20", "PLR2004", "S311"]
+"tools/**" = ["T20", "PLR2004", "S105"]
+
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["fastapi.Depends", "fastapi.Query", "fastapi.Path", "fastapi.Header", "fastapi.Body"]
+
+[tool.mypy]
+strict = true
+python_version = "3.14"
+mypy_path = "src"
+packages = ["fathom"]
+plugins = ["pydantic.mypy"]
+warn_unreachable = true
+
+[[tool.mypy.overrides]]
+module = ["asyncpg.*", "testcontainers.*", "pgvector.*", "fastembed.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "strict"
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = ["--strict-markers", "-ra"]
+xfail_strict = true
+filterwarnings = ["error"]
+
+[tool.importlinter]
+root_package = "fathom"
+include_external_packages = true
+exclude_type_checking_imports = true
+
+[[tool.importlinter.contracts]]
+name = "Ranking maths and chunking are pure: no database, no web, no model"
+type = "forbidden"
+source_modules = ["fathom.chunking", "fathom.fusion", "fathom.metrics"]
+forbidden_modules = ["asyncpg", "fastapi", "fastembed", "fathom.store", "fathom.api", "fathom.embedding"]
+
+[[tool.importlinter.contracts]]
+name = "Layers: entry points on top, pure modules at the bottom"
+type = "layers"
+layers = [
+    "fathom.cli",
+    "fathom.api | fathom.evaluation",
+    "fathom.indexer | fathom.search",
+    "fathom.store | fathom.migrate | fathom.auth",
+    "fathom.embedding",
+    "fathom.chunking | fathom.fusion | fathom.metrics",
+    "fathom.settings | fathom.telemetry",
+]
