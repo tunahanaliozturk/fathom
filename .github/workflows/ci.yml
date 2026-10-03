@@ -1,0 +1,103 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  static:
+    name: lint, types, import contracts, licences
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: astral-sh/setup-uv@v10.2.0
+      - run: uv sync --locked
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run mypy src tests benchmarks
+      - run: uv run lint-imports
+      - run: uv run python tools/license_audit.py
+
+  tests:
+    name: unit and integration (pgvector in a container)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: astral-sh/setup-uv@v10.2.0
+      - run: uv sync --locked
+      - run: docker pull pgvector/pgvector:0.8.1-pg18
+      - run: uv run pytest tests -q
+
+  relevance:
+    name: relevance gate (SQuAD, real model, fails if nDCG@10 drops)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:0.8.1-pg18
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: fathom
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d fathom"
+          --health-interval 2s
+          --health-retries 30
+    env:
+      FATHOM_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/fathom
+      FATHOM_MODEL_CACHE_DIR: ${{ github.workspace }}/.models
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: astral-sh/setup-uv@v10.2.0
+      - uses: actions/cache@v6.1.0
+        with:
+          path: |
+            .models
+            ~/.cache/fathom
+          key: relevance-bge-small-squad11-v1
+      - run: uv sync --locked
+      - run: uv run fathom migrate
+      - name: Evaluate and compare with eval/baseline.json
+        run: uv run fathom eval --profile ci --baseline eval/baseline.json --output eval-report.json
+      - if: always()
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: eval-report
+          path: eval-report.json
+
+  vulnerabilities:
+    name: known vulnerabilities in dependencies and the image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: astral-sh/setup-uv@v10.2.0
+      - run: uv export --locked --no-dev --no-emit-project --format requirements-txt -o requirements.txt
+      - run: uvx pip-audit --requirement requirements.txt --disable-pip --no-deps --strict
+      - run: docker build --tag fathom:scan .
+      - uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: fathom:scan
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"
+
+  quickstart:
+    name: README quick start against the compose stack
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: astral-sh/setup-uv@v10.2.0
+      - run: docker compose up --build --detach --wait --wait-timeout 600
+      - name: Create a key and walk the quick start
+        run: |
+          key=$(docker compose run --rm --no-deps api keys create --collections '*' --scopes read,write | tail -1)
+          uv run --no-project python tools/smoke.py "$key"
+      - if: failure()
+        run: docker compose logs
