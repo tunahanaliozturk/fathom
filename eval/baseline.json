@@ -1,0 +1,41 @@
+{
+  "profile": "ci",
+  "model": "BAAI/bge-small-en-v1.5",
+  "passages": 2067,
+  "questions": 400,
+  "options": {
+    "candidates": 50,
+    "rrf_k": 10,
+    "weights": null,
+    "ef_search": 100,
+    "iterative_scan": true,
+    "lexical_ranker": "ts_rank",
+    "lexical_normalization": 1
+  },
+  "modes": {
+    "lexical": {
+      "ndcg_at_10": 0.8462,
+      "recall_at_10": 0.9575,
+      "recall_at_50": 0.99,
+      "mrr_at_10": 0.8105,
+      "p50_ms": 16.6,
+      "p95_ms": 45.4
+    },
+    "vector": {
+      "ndcg_at_10": 0.8162,
+      "recall_at_10": 0.9425,
+      "recall_at_50": 0.99,
+      "mrr_at_10": 0.7752,
+      "p50_ms": 32.8,
+      "p95_ms": 90.6
+    },
+    "hybrid": {
+      "ndcg_at_10": 0.9032,
+      "recall_at_10": 0.99,
+      "recall_at_50": 0.9975,
+      "mrr_at_10": 0.8742,
+      "p50_ms": 40.7,
+      "p95_ms": 82.7
+    }
+  }
+}
