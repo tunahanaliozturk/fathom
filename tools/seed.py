@@ -136,13 +136,35 @@ def create_key(scope: str, label: str) -> str:
     return printed[-1]
 
 
-def main() -> None:
+def sent_before(manifest: Path) -> set[str]:
+    """The ids an earlier run sent. A list that cannot be read is an empty one: nothing is deleted on its word."""
+    if not manifest.exists():
+        return set()
+    try:
+        listed = json.loads(manifest.read_text(encoding="utf-8"))
+    except OSError, ValueError:
+        listed = None
+    if not isinstance(listed, list) or not all(isinstance(item, str) for item in listed):
+        # Sections that have since left the corpus stay in the collection: docs/operations.md says how to clear them.
+        print(f"{manifest.name} could not be read; treating it as empty")
+        return set()
+    return set(listed)
+
+
+def remember(manifest: Path, ids: set[str]) -> None:
+    """Written beside the old list and moved over it, so a run that is stopped half way leaves one whole list."""
+    draft = manifest.with_name(manifest.name + ".tmp")
+    draft.write_text(json.dumps(sorted(ids)), encoding="utf-8")
+    draft.replace(manifest)
+
+
+def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--api", default="http://api:8000")
     parser.add_argument("--corpus", type=Path, default=Path("/corpus"))
     parser.add_argument("--state", type=Path, default=Path("/var/lib/fathom"))
     parser.add_argument("--timeout", type=float, default=600, help="seconds to wait for the indexer")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     base = f"{args.api}/v1/collections/{COLLECTION}"
 
     corpus = documents(args.corpus)
@@ -167,12 +189,15 @@ def main() -> None:
         print(f"{len(corpus)} documents sent: {len(corpus) - unchanged} written, {unchanged} unchanged")
 
         manifest: Path = args.state / "seeded.json"
-        before = set(json.loads(manifest.read_text(encoding="utf-8"))) if manifest.exists() else set()
         current = {document["id"] for document in corpus}
-        for stale in sorted(before - current):
+        kept = set()
+        for stale in sorted(sent_before(manifest) - current):
             status, _ = call("DELETE", f"{base}/documents/{stale}", write_key)
             print(f"removed {stale}: {status}")
-        manifest.write_text(json.dumps(sorted(current)), encoding="utf-8")
+            # Gone, or already gone. Anything else stays on the list, so the next run tries again.
+            if status not in {204, 404}:
+                kept.add(stale)
+        remember(manifest, current | kept)
     finally:
         _fathom("keys", "revoke", write_key.split("_")[1])
 
