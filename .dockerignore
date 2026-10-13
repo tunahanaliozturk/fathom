@@ -1,0 +1,15 @@
+.git
+.venv
+.github
+.hypothesis
+.import_linter_cache
+.mypy_cache
+.pytest_cache
+.ruff_cache
+benchmarks
+corpus
+docs
+eval
+tests
+tools
+web
