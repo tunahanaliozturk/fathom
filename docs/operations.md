@@ -10,6 +10,13 @@
 | `fathom keys create / revoke` | manages API keys; `create` prints the key once | by hand |
 | `fathom eval` | measures relevance on SQuAD; with `--baseline`, exits 1 on a regression | in CI, and before changing a ranking default |
 
+The compose stack adds two things that are not part of the service:
+
+| service | what it does | how many |
+|---|---|---|
+| `seed` | `tools/seed.py`, in the fathom image: creates the console's read key, sends the demo corpus through the API, waits until `pending` is 0, exits | once per `docker compose up` |
+| `web` | nginx: serves the console and proxies two routes of the `demo` collection with that key | one |
+
 ## Configuration
 
 | variable | default | meaning |
@@ -30,6 +37,16 @@
 | `FATHOM_MAX_PAYLOAD_BYTES` | 4 MiB | largest request body |
 | `FATHOM_OTLP_ENDPOINT` | unset | base URL of an OTLP/HTTP collector; traces and metrics are off without it |
 | `FATHOM_LOG_LEVEL` | INFO | JSON logs on stdout |
+
+The console's proxy has its settings in `web/nginx.conf`, not in the environment:
+
+| setting | value | raising it | lowering it |
+|---|---|---|---|
+| `limit_req_zone ... zone=search rate=` | 10 requests a second per client address, burst 30 | one address can put more load on the API | the comparison view, which sends three searches per pause in typing, starts getting 429s |
+| `limit_req_zone ... zone=stats rate=` | 2 requests a second per client address, burst 10 | more polling of a query that counts rows | the status line shows "unavailable" on busy shared addresses |
+| `client_max_body_size` | 8 KB | larger filters and queries reach the API | a 1,000-character query in a multi-byte script is refused with 413 |
+| `proxy_read_timeout` | 15 seconds | a stuck API holds a connection longer | a slow first search after a restart, while the model loads, is cut off with 503 |
+| the collection | `demo`, written into both `location =` lines and their `proxy_pass` | | |
 
 ## What to watch
 
@@ -59,6 +76,33 @@ the backlog alert while they catch up.
 **A key leaked.** `fathom keys revoke <id>` (the id is the part after `fth_`). It stops working everywhere within
 `FATHOM_KEY_CACHE_SECONDS`.
 
+**The console says "The server refused the search (401 Unauthorised)".** The proxy's key is no longer accepted: it was
+revoked, or the database volume was replaced while the key volume was kept. Confirm with
+`docker compose exec web wget -q -O - http://127.0.0.1:8080/api/v1/collections/demo/stats`, which prints the counts
+when the key works and fails with `401` when it does not. Then:
+
+```sh
+docker compose run --rm seed   # sees the key refused, creates another, writes it to the volume
+docker compose restart web     # nginx reads the key only when it starts
+```
+
+The same wget prints the counts afterwards. Do not edit the key file by hand: the web container refuses to start on
+anything that is not shaped like a key, by design.
+
+**The web container exits at start with "read.key is missing" or "does not hold an API key".** The seed step did not
+finish. `docker compose logs seed` says why: usually the API was not reachable, or the indexer did not embed the
+corpus within the seed step's ten minutes ("the indexer did not finish"), in which case see "Indexing is behind".
+
+**The console says "Too many searches".** One address sent more than 10 searches a second for longer than the burst
+allows. Behind Docker Desktop, or any proxy that hides client addresses, all clients count as one address
+(`docker compose logs web | grep " 429 "` shows the requests). Waiting three seconds refills the burst. Raising the
+rate in `web/nginx.conf` raises what one caller may cost the API; if real clients sit behind a trusted proxy, set
+`set_real_ip_from` and `real_ip_header` instead.
+
+**The demo returns a section that no longer exists, or misses a new one.** The corpus is read when the stack starts.
+`docker compose run --rm seed` runs the seed step again: it writes changed sections, deletes the ones that are gone,
+prints how many of each, and returns when the indexer has caught up.
+
 ## Known limitations
 
 - **English only.** The text index uses Postgres' `english` configuration and the default model is English.
@@ -69,3 +113,6 @@ the backlog alert while they catch up.
 - **Snippets are plain text** with « and » around matches. They are not HTML-escaped: escape them before rendering.
 - **The evaluation is SQuAD**, whose questions share many words with their answers. It is a regression gate for this
   code, not a claim about other corpora (ADR 4).
+- **The console is a demo of one collection.** Its proxy lets anyone who reaches the port read `demo`, its rate limit
+  is per address as nginx sees it, and the page assumes the default `FATHOM_RRF_K` and `FATHOM_CANDIDATES` when it
+  works out a score (ADR 8, ADR 10).

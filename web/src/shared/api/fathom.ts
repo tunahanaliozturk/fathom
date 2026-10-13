@@ -10,8 +10,8 @@ import { MODES, type Mode } from './modes'
 import type { components } from './schema'
 
 // Zod normally compiles a fast parser with `new Function`, and tries it once to see whether it may. The page's
-// content security policy forbids that, and even the attempt is reported as a violation. Five small objects do not
-// need the fast path.
+// content security policy forbids that, and even the attempt is reported as a violation. A few small objects do not
+// need the fast path, and without it nothing in the bundle evaluates a string as code.
 z.config({ jitless: true })
 
 /** The one collection the proxy forwards. The name appears again in nginx.conf and tools/seed.py. */
