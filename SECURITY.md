@@ -32,8 +32,16 @@ The console in `web/` puts a page in front of the API. ADR 8 has the reasoning; 
 - **The proxy is an allowlist.** Two exact routes of one collection are forwarded. Every other path under `/api/`,
   and the same paths with another method, get a 404 from nginx without reaching the API. An `Authorization` header
   sent by a client is replaced, not forwarded. `web/e2e/proxy.spec.ts` asks for what should be refused.
-- **Searches are rate-limited per client address** (10 a second, burst 30) and request bodies are capped at 8 KB,
-  because that origin answers anyone.
+- **Searches are rate-limited per client address** (10 a second, burst 30; the same again for the counts) and request
+  bodies are capped at 8 KB, because that origin answers anyone.
+- **The key file is checked whole before nginx reads it.** Its content becomes a line of configuration, so anything
+  other than exactly one key (a second line, a carriage return, a quote) stops the container at start.
+  `tests/unit/test_read_key.py` feeds it a key followed by a line of nginx configuration.
+- **Every answer carries the same security headers**, the proxy's own 404, 429 and 503 and a 404 for a missing file
+  included; `web/e2e/proxy.spec.ts` checks each.
+- **What people search for is not written to the access log.** The query is in the page's address, so the log line
+  holds the path without the query string, and the page sends no Referer. nginx's error log still quotes the first
+  line of a request it reports an error about.
 - **Snippets are rendered as text.** The page splits a snippet into text nodes and `<mark>` elements and never
   parses it as markup; `v-html` is forbidden by a lint rule that fails the build. The content security policy is
   `default-src 'self'`, with no inline script or style, so markup that did get through would still not run.

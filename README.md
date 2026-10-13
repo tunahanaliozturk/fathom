@@ -33,8 +33,8 @@ The page shows one thing: for the same query, what each retriever found, and how
   list; a result one retriever never returned has no line on that side. Under the picture, the selected passage's score
   is worked out: 1 / (10 + rank) from each retriever, added.
 - Four example queries are picked so that the retrievers disagree: a paraphrase that shares no word with its answer,
-  an exact number the vector retriever ranks far down, a question each retriever answers differently, and one where
-  they agree.
+  an exact number that only the lexical retriever puts first, a question each retriever answers differently, and one
+  where they agree.
 
 The browser never holds an API key. nginx, in the web container, adds a read-only key for that one collection, forwards
 two routes and refuses the rest, and limits how fast one address may search
@@ -149,7 +149,10 @@ sequenceDiagram
 | A metadata filter applies inside both retrievers | `test_a_metadata_filter_applies_to_both_retrievers` |
 | Chunks never exceed their budget and lose no words | `test_no_chunk_exceeds_the_budget_and_no_word_is_lost` (Hypothesis) |
 | The browser never sends or receives an API key | `the page never sends or receives an API key` (Playwright, real stack) |
-| The proxy forwards two routes of one collection, refuses the rest, and limits the rate | the six tests in `web/e2e/proxy.spec.ts` |
+| The proxy forwards two routes of one collection, refuses the rest, limits the rate, and sends the same security headers with every answer | the eight tests in `web/e2e/proxy.spec.ts` |
+| The web container starts only with a key file that is one key and nothing else | `test_a_good_first_line_does_not_let_a_second_line_into_the_configuration`, and a CI step against the image |
+| The seed step deletes what left the corpus, keeps the proxy's key, and revokes its own | `tests/unit/test_seed_run.py` |
+| What people search for is not written to the proxy's log | the `quickstart` CI job sends a marked query and looks for it |
 | Text from a document is shown as text, never run | `shows markup inside a document as text and never builds an element from it` |
 | A change to a response field fails the build | the `contract` CI job and the type-check ([ADR 10](docs/adr/0010-the-browser-client.md)) |
 | A query that has been replaced has its request cancelled | `cancels the request for a query that has been replaced` |
@@ -189,18 +192,19 @@ uv run python tools/openapi.py && npm --prefix web run generate:api && git diff 
 
 ### The console, measured
 
-Measured on 2026-10-13 on the laptop in [the benchmark run](docs/benchmark-results/2026-10-04-laptop.md).
+Measured on 2026-10-14 on the laptop in [the benchmark run](docs/benchmark-results/2026-10-04-laptop.md). Lighthouse
+has not been run on a CI runner.
 
 | | measured | the build fails beyond |
 |---|---|---|
-| First load of the search view, script and style, gzip (`npm run size`, Node 24) | 80.2 kB | 88 kB |
-| Comparison view, added to that | 4.95 kB | 6 kB |
-| Lighthouse performance, built page, mobile profile, simulated throttling, each of 6 runs | 0.98 | 0.95 |
+| First load of the search view, script and style, gzip (`npm run size`) | 80.5 kB | 88 kB |
+| Comparison view, added to that | 5.3 kB | 6 kB |
+| Lighthouse performance, built page, mobile profile, simulated throttling, each of 3 runs | 0.99 | 0.95 at the median |
 | Lighthouse accessibility, same runs | 1.0 | 1.0 |
-| Largest contentful paint, same runs | 2.16 to 2.28 s | 2.5 s |
+| Largest contentful paint, same runs | 1.90, 1.88 and 1.88 s | 2.5 s at the median |
 | Cumulative layout shift, same runs | 0 | 0.1 |
-| Unit and component tests (`npm run test:unit`) | 67, covering 99.1% of statements and 92.98% of branches | 99% and 92% |
-| Journeys against the compose stack (`npx playwright test`) | 22 in Chromium, 22 in Firefox, 6 against the proxy | any failure, any axe violation |
+| Unit and component tests (`npm run test:unit`) | 86, covering 98.94% of statements and 93.44% of branches | 98% and 93% |
+| Journeys against the compose stack (`npx playwright test`) | 26 in Chromium, 26 in Firefox, 8 against the proxy | any failure, any axe violation |
 
 ## Limitations
 

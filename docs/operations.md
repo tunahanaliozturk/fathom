@@ -43,10 +43,15 @@ The console's proxy has its settings in `web/nginx.conf`, not in the environment
 | setting | value | raising it | lowering it |
 |---|---|---|---|
 | `limit_req_zone ... zone=search rate=` | 10 requests a second per client address, burst 30 | one address can put more load on the API | the comparison view, which sends three searches per pause in typing, starts getting 429s |
-| `limit_req_zone ... zone=stats rate=` | 2 requests a second per client address, burst 10 | more polling of a query that counts rows | the status line shows "unavailable" on busy shared addresses |
+| `limit_req_zone ... zone=stats rate=` | 10 requests a second per client address, burst 30, apart from the searches | more polling of a query that counts rows | the status line shows "unavailable" when several pages load from one address at once (at 2 a second, burst 10, the journeys did that) |
 | `client_max_body_size` | 8 KB | larger filters and queries reach the API | a 1,000-character query in a multi-byte script is refused with 413 |
 | `proxy_read_timeout` | 15 seconds | a stuck API holds a connection longer | a slow first search after a restart, while the model loads, is cut off with 503 |
 | the collection | `demo`, written into both `location =` lines and their `proxy_pass` | | |
+
+What the console's proxy writes to its log (`docker compose logs web`): one line per request with the client
+address, the time, the method, the path up to the question mark, the status and the size. The query string is left
+out because it holds what people search for, and the page sends no Referer. nginx's error log is unchanged and quotes
+the first line of a request it reports an error about.
 
 ## What to watch
 
@@ -101,7 +106,30 @@ rate in `web/nginx.conf` raises what one caller may cost the API; if real client
 
 **The demo returns a section that no longer exists, or misses a new one.** The corpus is read when the stack starts.
 `docker compose run --rm seed` runs the seed step again: it writes changed sections, deletes the ones that are gone,
-prints how many of each, and returns when the indexer has caught up.
+prints how many of each, and returns when the indexer has caught up. A delete that failed is printed with its status
+(`removed <id>: 503`) and tried again by the next run.
+
+**The seed step logs "seeded.json could not be read; treating it as empty", or the key volume was removed while the
+database was kept.** The list of what the seed step had sent is gone, and with a removed volume so is the proxy's key
+file. The next start creates a new key and sends the corpus again, so the page works. Two things are left behind in
+the database, and neither clears itself: the previous proxy key is still valid, and sections that have left the
+corpus since are still in the collection. To clear both:
+
+```sh
+docker compose exec postgres psql -U postgres -d fathom -c \
+  "select id, label, created_at from fathom_api_keys where revoked_at is null"   # every 'web proxy' row but the newest
+docker compose run --rm api keys revoke <id>
+docker compose exec postgres psql -U postgres -d fathom -c \
+  "delete from fathom_documents where collection = 'demo'"                       # chunks go with their documents
+docker compose run --rm seed                                                    # sends the corpus as it is now
+```
+
+Do not delete the rows of `fathom_api_keys` instead of revoking: a key the proxy is still using would stop working
+at once, and the row is the only record that the key existed.
+
+**`fathom_api_keys` keeps growing on a laptop.** Every start of the stack creates a write key for the seed step and
+revokes it when the step ends, so each `docker compose up` leaves one revoked row labelled `seed`. They do nothing
+and can be deleted: `delete from fathom_api_keys where label = 'seed' and revoked_at is not null`.
 
 ## Known limitations
 
