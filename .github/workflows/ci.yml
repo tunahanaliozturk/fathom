@@ -181,19 +181,43 @@ jobs:
         run: |
           key=$(docker compose run --rm --no-deps api keys create --collections '*' --scopes read,write | tail -1)
           uv run --no-project python tools/smoke.py "$key"
-      - name: The seed step is safe to run again
+      - name: The seed step is safe to run again, and keeps the key it made
         run: |
+          before=$(docker compose exec -T web sha256sum /run/fathom/read.key)
           docker compose up --detach --wait --wait-timeout 300
           docker compose logs seed | tail -2 | grep ": 0 written"
-      - name: The web image does not start without a key, or with something that is not one
+          # Two runs, one key: the file the proxy reads is the same file. A changed digest would mean that each
+          # start mints a key, and that the running proxy holds a different one from the volume.
+          test "$before" = "$(docker compose exec -T web sha256sum /run/fathom/read.key)"
+      - name: The web image starts only with a file that is one key and nothing else
         run: |
-          if docker run --rm fathom-web:local; then echo "started with no key file"; exit 1; fi
-          docker volume create not-a-key
-          docker run --rm --user 0 --entrypoint sh --volume not-a-key:/keys fathom-web:local \
-            -c "echo 'fth_x\"; include /etc/passwd;' > /keys/read.key"
-          if docker run --rm --volume not-a-key:/run/fathom:ro fathom-web:local; then
-            echo "started with a file that is not a key"; exit 1
-          fi
+          # The entrypoint has to stop by itself with exit 1. If nginx started, `timeout` ends the wait after 30
+          # seconds with 124, and that is a failure here, not six hours of a job that never returns.
+          refuses() {
+            set +e
+            timeout 30 docker run --rm "$@" fathom-web:local > refused.log 2>&1
+            code=$?
+            set -e
+            cat refused.log
+            test "$code" -eq 1
+          }
+          refuses
+          grep "read.key is missing" refused.log
+          # A good first line, then a line nginx would accept as configuration if the file were written out
+          # unchecked (it closes the header's quote and adds a directive). The check must look at the whole file.
+          docker volume create key-and-more
+          docker run --rm --user 0 --entrypoint sh --volume key-and-more:/keys fathom-web:local -c \
+            'printf "fth_0123456789abcdef_%043d\n\"; add_header X-Injected \"by the key file\" always; set \$x \"\n" 0 > /keys/read.key'
+          refuses --volume key-and-more:/run/fathom:ro
+          grep "does not hold an API key" refused.log
+      - name: The proxy's log does not record what people search for
+        run: |
+          curl --silent --show-error --output /dev/null "http://127.0.0.1:8340/?q=sentinel-7f3a9c-query"
+          curl --silent --show-error --output /dev/null \
+            --referer "http://127.0.0.1:8340/compare?q=sentinel-7f3a9c-query" http://127.0.0.1:8340/favicon.svg
+          docker compose logs web > web.log
+          grep '"GET /favicon.svg" 200' web.log
+          if grep sentinel-7f3a9c web.log; then echo "a query reached the log"; exit 1; fi
       - run: npm ci
         working-directory: web
       - run: npx playwright install --with-deps chromium firefox

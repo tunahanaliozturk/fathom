@@ -13,7 +13,7 @@ USER root
 RUN apk upgrade --no-cache
 USER nginx
 COPY nginx.conf /etc/nginx/conf.d/default.conf
-COPY fathom-proxy.conf /etc/nginx/fathom-proxy.conf
+COPY fathom-proxy.conf fathom-headers.conf /etc/nginx/
 # The key is not in the image. This script reads it from a volume when the container starts.
 COPY --chmod=755 read-key.sh /docker-entrypoint.d/40-fathom-read-key.sh
 COPY --from=build /web/dist /usr/share/nginx/html

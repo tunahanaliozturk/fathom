@@ -273,7 +273,7 @@ describe('the search view', () => {
     let refuse = true
     const calls = network(() =>
       refuse
-        ? problem(429, 'Too many requests', 'one address may send 10 searches a second')
+        ? problem(429, 'Too many requests', 'this address is sending requests faster than the proxy allows')
         : found('hybrid', [fusion]),
     )
     const user = userEvent.setup()

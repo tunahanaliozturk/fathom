@@ -57,7 +57,7 @@ describe('search', () => {
   })
 
   it('reports a rate limit with the title and detail the proxy sent', async () => {
-    network(() => problem(429, 'Too many requests', 'one address may send 10 searches a second'))
+    network(() => problem(429, 'Too many requests', 'this address is sending requests faster than the proxy allows'))
 
     const failure = await failureOf(search('q', 'hybrid', never))
 
@@ -65,7 +65,7 @@ describe('search', () => {
       kind: 'rate-limited',
       status: 429,
       title: 'Too many requests',
-      detail: 'one address may send 10 searches a second',
+      detail: 'this address is sending requests faster than the proxy allows',
     })
   })
 

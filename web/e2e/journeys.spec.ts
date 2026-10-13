@@ -374,7 +374,7 @@ test('a rate limit is explained, and the search can be repeated', async ({ page 
         type: 'about:blank',
         title: 'Too many requests',
         status: 429,
-        detail: 'one address may send 10 searches a second',
+        detail: 'this address is sending requests faster than the proxy allows',
       }),
     }),
   )
