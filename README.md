@@ -195,12 +195,12 @@ Measured on 2026-10-13 on the laptop in [the benchmark run](docs/benchmark-resul
 |---|---|---|
 | First load of the search view, script and style, gzip (`npm run size`, Node 24) | 80.2 kB | 88 kB |
 | Comparison view, added to that | 4.95 kB | 6 kB |
-| Lighthouse performance, built page, mobile profile, simulated throttling, median of 3 | 0.98 | 0.95 |
-| Lighthouse accessibility | 1.0 | 1.0 |
-| Largest contentful paint, same runs | 2.2 s | 2.5 s |
+| Lighthouse performance, built page, mobile profile, simulated throttling, each of 6 runs | 0.98 | 0.95 |
+| Lighthouse accessibility, same runs | 1.0 | 1.0 |
+| Largest contentful paint, same runs | 2.16 to 2.28 s | 2.5 s |
 | Cumulative layout shift, same runs | 0 | 0.1 |
 | Unit and component tests (`npm run test:unit`) | 67, covering 99.1% of statements and 92.98% of branches | 99% and 92% |
-| Journeys against the compose stack (`npx playwright test`) | 17 in Chromium, 17 in Firefox, 6 against the proxy | any failure, any axe violation |
+| Journeys against the compose stack (`npx playwright test`) | 22 in Chromium, 22 in Firefox, 6 against the proxy | any failure, any axe violation |
 
 ## Limitations
 

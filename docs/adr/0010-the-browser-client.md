@@ -54,9 +54,9 @@ and checks that no element was created from them.
 - A change to a response field cannot merge unnoticed: the contract job, the type-check or both fail, as above.
 - The first load of the search view is 80.2 kB of script and style, gzipped, of which Zod and the query library are
   about 36 kB; the comparison view adds 4.95 kB (`npm run size`, which fails the build above 88 kB and 6 kB). Lighthouse
-  on the built page, mobile profile with simulated throttling, three runs: performance 0.98, accessibility 1.0,
-  largest contentful paint 2.2 s, layout shift 0 (`npm run lighthouse`, which fails below 0.95 and 1.0 and above 2.5 s
-  and 0.1).
+  on the built page, mobile profile with simulated throttling, six runs: performance 0.98, accessibility 1.0, largest
+  contentful paint between 2.16 and 2.28 s, layout shift 0 (`npm run lighthouse`, which fails below 0.95 and 1.0 and
+  above 2.5 s and 0.1). The paint is the number closest to its limit.
 - Zod runs without its compiled fast path (`z.config({ jitless: true })`). The fast path uses `new Function`, which
   the content security policy forbids, and Zod's test for whether it may use it is itself reported as a violation.
   The journey `the page loads nothing the content security policy refuses` found that.

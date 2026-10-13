@@ -426,30 +426,58 @@ test('a request that gets no answer is told apart from an error', async ({ page 
   await expect(alert).toContainText('Check the connection, then search again.')
 })
 
-test('every view passes axe', async ({ page }) => {
-  await page.goto('/')
-  await expect(page.getByRole('button', { name: NUMBER })).toBeVisible()
-  await expect(indexStatus(page)).toContainText('all with vectors')
-  await axe(page)
+// One test per state, so that a slow machine runs out of time on none of them and a violation names its view.
+const views: { name: string; open: (page: Page) => Promise<void> }[] = [
+  {
+    name: 'the search view before a query',
+    open: async (page) => {
+      await page.goto('/')
+      await expect(page.getByRole('button', { name: NUMBER })).toBeVisible()
+      await expect(indexStatus(page)).toContainText('all with vectors')
+    },
+  },
+  {
+    name: 'the search view with results',
+    open: async (page) => {
+      await page.goto(address('/', QUESTION))
+      await expect(results(page)).toHaveCount(10)
+    },
+  },
+  {
+    name: 'the search view with no results',
+    open: async (page) => {
+      await page.goto(address('/', PARAPHRASE, 'lexical'))
+      await expect(page.getByRole('heading', { name: 'Nothing matched' })).toBeVisible()
+    },
+  },
+  {
+    name: 'the comparison',
+    open: async (page) => {
+      await page.goto(address('/compare', QUESTION))
+      await expect(column(page, 'Fused').getByRole('button')).toHaveCount(10)
+    },
+  },
+  {
+    // One lexical hit, and a fused result that comes from below the vector list's rows.
+    name: 'the comparison when the lists are uneven',
+    open: async (page) => {
+      await page.goto(address('/compare', NUMBER))
+      await expect(column(page, 'Lexical').getByRole('button')).toHaveCount(1)
+    },
+  },
+  {
+    name: 'the comparison on a narrow screen',
+    open: async (page) => {
+      await page.setViewportSize({ width: 390, height: 800 })
+      await page.goto(address('/compare', QUESTION))
+      await expect(column(page, 'Fused').getByRole('button')).toHaveCount(10)
+    },
+  },
+]
 
-  await page.goto(address('/', QUESTION))
-  await expect(results(page)).toHaveCount(10)
-  await axe(page)
-
-  await page.goto(address('/', PARAPHRASE, 'lexical'))
-  await expect(page.getByRole('heading', { name: 'Nothing matched' })).toBeVisible()
-  await axe(page)
-
-  await page.goto(address('/compare', QUESTION))
-  await expect(column(page, 'Fused').getByRole('button')).toHaveCount(10)
-  await axe(page)
-
-  // The number has one lexical hit and a fused result that comes from below the vector list's rows.
-  await page.goto(address('/compare', NUMBER))
-  await expect(column(page, 'Lexical').getByRole('button')).toHaveCount(1)
-  await axe(page)
-
-  await page.setViewportSize({ width: 390, height: 800 })
-  await expect(column(page, 'Fused').getByRole('button')).toHaveCount(10)
-  await axe(page)
-})
+for (const view of views) {
+  test(`axe finds nothing wrong with ${view.name}`, async ({ page }) => {
+    await view.open(page)
+    await axe(page)
+  })
+}
