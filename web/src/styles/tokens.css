@@ -1,0 +1,109 @@
+/* Two inks on white. Blue is always the lexical retriever and plum is always the vector retriever, wherever a rank,
+   a column or a line appears; the fused result is plain ink. Both are dark enough for small text on white
+   (7:1 or better), and neither is ever the only thing that tells the two apart: a label sits next to every use. */
+:root {
+  color-scheme: light;
+
+  --paper: #ffffff;
+  --band: #f3f4f6;
+  --ink: #15181e;
+  --ink-soft: #4b5261;
+  --rule: #d4d8df;
+  --rule-strong: #8a919e;
+  --lexical: #1a48c4;
+  --lexical-wash: #e8edfb;
+  --vector: #9a1763;
+  --vector-wash: #fae9f2;
+  --mark: #ffe27a;
+  --alarm: #a11d12;
+
+  --font-ui: 'Segoe UI Variable Text', 'Segoe UI', system-ui, -apple-system, 'Helvetica Neue', Arial, sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', Menlo, Consolas, 'DejaVu Sans Mono', 'Liberation Mono', monospace;
+
+  --page: 72rem;
+  --gutter: clamp(1rem, 4vw, 2.5rem);
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-ui);
+  font-size: 1rem;
+  line-height: 1.5;
+  -webkit-text-size-adjust: 100%;
+}
+
+h1,
+h2,
+h3,
+p,
+ol,
+ul,
+dl,
+dd {
+  margin: 0;
+  padding: 0;
+}
+
+ol,
+ul {
+  list-style: none;
+}
+
+button,
+input {
+  font: inherit;
+  color: inherit;
+}
+
+:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+
+/* A heading that receives focus after a route change is not something to click: no ring around the page title. */
+h1:focus {
+  outline: none;
+}
+
+mark {
+  background: var(--mark);
+  color: var(--ink);
+  padding: 0 0.1em;
+}
+
+/* Read by a screen reader, not drawn. */
+.unseen {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.lexical {
+  --retriever: var(--lexical);
+  --retriever-wash: var(--lexical-wash);
+}
+
+.vector {
+  --retriever: var(--vector);
+  --retriever-wash: var(--vector-wash);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0s !important;
+    animation-duration: 0s !important;
+  }
+}
