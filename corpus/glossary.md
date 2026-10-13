@@ -13,9 +13,9 @@ exact search can find later.
 ## Stemming
 
 Reducing a word to its root so that different grammatical forms land on the same index entry: "running", "runs" and
-"ran" are treated as one term, as far as the algorithm can tell. Postgres' `english` configuration uses the Snowball
-stemmer. It is why a query for "indexes" finds a passage that says "indexing", and also why it sometimes conflates
-words that only look related.
+"run" are treated as one term. Postgres' `english` configuration uses the Snowball stemmer, which works by rules on
+word endings and has no dictionary, so an irregular form such as "ran" stays a term of its own. It is why a query for
+"indexes" finds a passage that says "indexing", and also why it sometimes conflates words that only look related.
 
 ## Stop words
 
@@ -174,9 +174,10 @@ weights tuned on one corpus do not carry over to another.
 
 ## Candidates
 
-How many results each retriever contributes before fusion. fathom takes 50 from each. A document that the lexical
-retriever puts at position 51 does not exist as far as fusion is concerned, so the number bounds what hybrid search
-can recover.
+How many passages each retriever hands to fusion. fathom takes 50 from each. A passage that the lexical retriever
+puts at position 51 gets nothing from the lexical side; it is still fused, on its vector rank alone, if the vector
+retriever returns it. A passage outside both lists does not exist as far as fusion is concerned, so the number bounds
+what hybrid search can recover. The positions count passages, not documents.
 
 ## Chunking
 

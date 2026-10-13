@@ -16,12 +16,12 @@ export const EXAMPLES: Example[] = [
   {
     query: '0.6003',
     shows:
-      'An exact number. One passage contains it, and the vector retriever does not have that passage in its first ten.',
+      'An exact number. One passage contains it: the lexical retriever returns that passage and nothing else, and the vector retriever puts other passages first.',
   },
   {
     query: 'what happens if the machine dies halfway through a job',
     shows:
-      'A question. Each retriever puts a different passage first, and fusion prefers one that both rank near the top.',
+      'A question. Each retriever puts a different passage first, and the first fused result is one that both have in their first ten.',
   },
   {
     query: 'reciprocal rank fusion k',

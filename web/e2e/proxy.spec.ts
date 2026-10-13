@@ -141,12 +141,13 @@ test('the proxy refuses a body larger than a search needs', async ({ request }) 
 })
 
 test('the proxy limits how fast one address may ask for the counts', async ({ request }) => {
-  // Two a second with a burst of ten. The page asks once per load, so thirty at once is not a person.
-  const answers = await Promise.all(Array.from({ length: 30 }, () => request.get(`${DEMO}/stats`)))
+  // Ten a second with a burst of thirty, in a bucket apart from the searches. The page asks once per load.
+  const answers = await Promise.all(Array.from({ length: 120 }, () => request.get(`${DEMO}/stats`)))
   const limited = answers.filter((answer) => answer.status() === 429)
 
   expect(new Set(answers.map((answer) => answer.status()))).toEqual(new Set([200, 429]))
-  expect(limited.length).toBeGreaterThanOrEqual(15)
+  expect(answers.length - limited.length).toBeGreaterThanOrEqual(30)
+  expect(limited.length).toBeGreaterThanOrEqual(60)
   // The same refusal as for a search, in words that are true of both limits.
   expect(await limited[0]?.json()).toEqual(LIMITED)
 })

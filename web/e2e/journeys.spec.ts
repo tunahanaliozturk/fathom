@@ -1,8 +1,10 @@
 // The journeys the console exists for, against the real stack: nginx, the API, the embedding model, the indexer,
 // Postgres, and the corpus the seed step sent. Nothing here writes, so the tests can run side by side and again.
 //
-// The titles and ranks asserted below are what this repository's documentation returns (ADR 9). When an edit to the
-// documentation moves one, the failure is the reminder to look at the example it belongs to.
+// The corpus is this repository's documentation (ADR 9), so an edit to a document can move a rank. The journeys
+// therefore read ranks and scores from the page and check what the page derives from them, and assert a title or a
+// relation between ranks only where the page itself makes that claim (the four examples), with the room there is
+// around each one noted beside it. When an edit does move one, the failure is the reminder to look at that example.
 
 import AxeBuilder from '@axe-core/playwright'
 import { expect, test, type Locator, type Page, type Request, type Response } from '@playwright/test'
@@ -33,13 +35,26 @@ const readout = (result: Locator) => ({
   score: result.getByRole('definition').nth(2),
 })
 
-/** A row of the comparison by the parts of its accessible name, in order. Spacing between parts is left open. */
-const named = (...parts: string[]): RegExp =>
-  new RegExp(
-    parts
-      .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`).replaceAll(' ', String.raw`\s*`))
-      .join(String.raw`\s*,\s*`),
-  )
+/** A comparison row for `passage`, whatever ranks its name starts with. */
+const ending = (passage: string): RegExp => new RegExp(`, ${passage.replace(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`)}$`)
+
+/** What a comparison row says of itself: its ranks, and the passage. `null` where a retriever did not return it. */
+async function rowOf(row: Locator): Promise<{ lexical: number | null; vector: number | null; passage: string }> {
+  const name = (await row.getAttribute('aria-label')) ?? ''
+  const rank = (retriever: string): number | null => {
+    const found = new RegExp(`${retriever} rank (\\d+)`).exec(name)
+    return found === null ? null : Number(found[1])
+  }
+  // The name is "…rank 3, …rank 2, fused rank 1, Section, Document": the passage is what follows the last rank.
+  const passage = name.replace(/^.*(?:rank \d+|retriever), /, '')
+  return { lexical: rank('lexical'), vector: rank('vector'), passage }
+}
+
+/** The document a row is about, without the part that says which of its passages. */
+const documentOf = (passage: string): string => passage.replace(/ \(passage \d+\)/, '')
+
+/** A row of the worked score, as the page writes it for a rank. */
+const adds = (rank: number): string => `1 / (10 + ${rank}) = ${(1 / (10 + rank)).toFixed(4)}`
 
 async function axe(page: Page): Promise<void> {
   const { violations } = await new AxeBuilder({ page }).analyze()
@@ -57,7 +72,7 @@ test('a search runs from the keyboard alone', async ({ page }) => {
   await expect(queryBox(page)).toBeFocused()
 
   await page.keyboard.type(AGREED)
-  await expect(results(page).first().getByRole('heading')).toHaveText('Glossary: Reciprocal rank fusion')
+  await expect(results(page).first().getByRole('heading')).toHaveText(/reciprocal rank fusion/i)
   await expect(page).toHaveURL(/\/\?q=reciprocal\+rank\+fusion\+k$/)
   await expect(outcome(page)).toHaveText(/^10 results from hybrid search in [\d.]+ ms\.$/)
 
@@ -82,14 +97,52 @@ test('typing sends one search per pause, not one per key', async ({ page }) => {
   page.on('request', (request) => {
     if (request.url().endsWith('/search')) sent.push(request.postData() ?? '')
   })
+  // The page's clock is held and moved by hand, so the pause is exactly as long as this test says it is.
+  await page.clock.install({ time: new Date('2026-10-13T12:00:00Z') })
+  await page.goto('/')
+  await expect(queryBox(page)).toBeVisible()
+  await page.clock.pauseAt(new Date('2026-10-13T12:01:00Z'))
+
+  await queryBox(page).pressSequentially('constant time comparison')
+  await page.clock.runFor(299)
+  expect(sent).toHaveLength(0)
+  await page.clock.runFor(1)
+  await expect.poll(() => sent.length).toBe(1)
+  expect(sent[0]).toContain('"query":"constant time comparison"')
+
+  await page.clock.resume()
+  await expect(results(page).first().getByRole('heading')).toHaveText(/constant-time comparison/i)
+  expect(sent).toHaveLength(1)
+})
+
+test('an example chosen from the keyboard leaves focus in the query box', async ({ page }) => {
+  await page.goto('/')
+  await expect(page.getByRole('heading', { level: 1, name: 'Search' })).toBeVisible()
+
+  // Skip link, two views, the query box, the retriever, then the first example.
+  for (let stop = 0; stop < 6; stop += 1) await page.keyboard.press('Tab')
+  await expect(page.getByRole('button', { name: PARAPHRASE })).toBeFocused()
+  await page.keyboard.press('Enter')
+
+  // The examples are gone, and with them the button that had focus. It must not fall back to the page.
+  await expect(results(page).first()).toBeVisible()
+  await expect(queryBox(page)).toBeFocused()
+  await expect(queryBox(page)).toHaveValue(PARAPHRASE)
+  // And the keyboard goes on from there.
+  await page.keyboard.press('ControlOrMeta+a')
+  await page.keyboard.type(NUMBER)
+  await expect(results(page).first().getByRole('heading')).toHaveText('fathom: Relevance')
+})
+
+test('text typed just before leaving the view goes along to the other view', async ({ page }) => {
   await page.goto('/')
 
-  await queryBox(page).pressSequentially('constant time comparison', { delay: 25 })
+  // Filled, and at once a click elsewhere: the 300 ms pause never passes while the box has focus.
+  await queryBox(page).fill('lease expiry deadline')
+  await page.getByRole('link', { name: 'Compare' }).click()
 
-  await expect(results(page).first().getByRole('heading')).toHaveText('Glossary: Constant-time comparison')
-  // 24 keys, 25 ms apart: every gap is shorter than the 300 ms pause, so only the finished query is sent.
-  expect(sent).toHaveLength(1)
-  expect(sent[0]).toContain('"query":"constant time comparison"')
+  await expect(page).toHaveURL(/\/compare\?q=lease\+expiry\+deadline$/)
+  await expect(queryBox(page)).toHaveValue('lease expiry deadline')
 })
 
 test('a paraphrase is found by the vector retriever and not by the lexical one', async ({ page }) => {
@@ -97,15 +150,19 @@ test('a paraphrase is found by the vector retriever and not by the lexical one',
   await page.getByRole('button', { name: PARAPHRASE }).click()
   await expect(queryBox(page)).toHaveValue(PARAPHRASE)
 
-  // Hybrid: the glossary entry is first, on the strength of the vector retriever alone.
-  const first = results(page).first()
-  await expect(first.getByRole('heading')).toHaveText('Glossary: Cross-site scripting')
-  await expect(first).toContainText('corpus/glossary.md')
-  await expect(readout(first).lexical).toHaveText('not in its top 50')
-  await expect(readout(first).vector).toHaveText(/^rank\s*1$/)
-  await expect(readout(first).score).toHaveText('0.0909')
+  // Hybrid: the glossary entry that answers it is found by the vector retriever alone. It was first when this was
+  // written; the assertion allows it to be third, since a new document about the same thing could pass it.
+  const entry = results(page).filter({ hasText: 'Glossary: Cross-site scripting' })
+  await expect(entry).toHaveCount(1)
+  await expect(entry).toContainText('corpus/glossary.md')
+  await expect(readout(entry).lexical).toHaveText('not in its top 50')
+  const rank = Number((await readout(entry).vector.innerText()).replace(/\D/g, ''))
+  expect(rank).toBeGreaterThanOrEqual(1)
+  expect(rank).toBeLessThanOrEqual(3)
+  // One retriever, one term: the score is what that rank alone adds.
+  await expect(readout(entry).score).toHaveText((1 / (10 + rank)).toFixed(4))
 
-  // Lexical: not one of the query's words is in the corpus.
+  // Lexical: not one of the query's words is in the corpus (ADR 9 keeps the examples out of the documentation).
   await page.getByRole('radio', { name: /Lexical/ }).check()
   await expect(page.getByRole('heading', { name: 'Nothing matched' })).toBeVisible()
   await expect(page.getByText('needs at least one word in common')).toBeVisible()
@@ -113,21 +170,25 @@ test('a paraphrase is found by the vector retriever and not by the lexical one',
 
   // Vector: the same entry, and the page says that the lexical retriever was not asked.
   await page.getByRole('radio', { name: /Vector/ }).check()
-  await expect(results(page).first().getByRole('heading')).toHaveText('Glossary: Cross-site scripting')
-  await expect(readout(results(page).first()).lexical).toHaveText('not run')
+  await expect(entry).toHaveCount(1)
+  await expect(readout(entry).lexical).toHaveText('not run')
 })
 
 test('an exact number is found by the lexical retriever, and fusion puts it first', async ({ page }) => {
   await page.goto(address('/', NUMBER))
 
+  // The number is in one passage of the README. The lexical retriever returns that passage and nothing else, which
+  // is enough to put it first: a lexical first place alone ties with the best the vector retriever can give.
   const first = results(page).first()
   await expect(first.getByRole('heading')).toHaveText('fathom: Relevance')
   await expect(readout(first).lexical).toHaveText(/^rank\s*1$/)
-  // The vector retriever has the passage, a long way down: a number means little to an embedding model.
-  const vectorRank = Number((await readout(first).vector.innerText()).replace(/\D/g, ''))
-  expect(vectorRank).toBeGreaterThan(10)
-  // What fusion did with those two ranks, to four places, is the score the API returned.
-  await expect(readout(first).score).toHaveText((1 / 11 + 1 / (10 + vectorRank)).toFixed(4))
+  // To the vector retriever a number means little. It ranked the passage 13th when this was written; the claim
+  // on the page is only that other passages come first, which leaves it eleven places of room.
+  const vector = /\d+/.exec(await readout(first).vector.innerText())
+  const vectorRank = vector === null ? null : Number(vector[0])
+  expect(vectorRank === null || vectorRank > 1).toBe(true)
+  // What fusion made of the two ranks is the score the API returned.
+  await expect(readout(first).score).toHaveText((1 / 11 + (vectorRank === null ? 0 : 1 / (10 + vectorRank))).toFixed(4))
 
   await page.getByRole('radio', { name: /Lexical/ }).check()
   await expect(outcome(page)).toHaveText(/^1 result from lexical search/)
@@ -142,24 +203,39 @@ test('a snippet marks the words that matched', async ({ page }) => {
   await expect(first.locator('mark')).toBeVisible()
   // The API's markers are gone from what is shown, and the words around the match are still there.
   await expect(first).not.toContainText('«')
-  await expect(first).toContainText('REGRESSION lexical: nDCG@10 0.6003 is below the baseline')
+  await expect(first).toContainText('0.6003 is below the baseline')
+})
+
+test('guillemets that belong to a document are shown, not taken for the marks of a match', async ({ page }) => {
+  // The documentation describes the API's markers, so some passages contain the two characters themselves. The
+  // words of this query are in one of those passages.
+  await page.goto(address('/', 'API marks matches escape anything', 'lexical'))
+
+  const passage = results(page).filter({ hasText: 'plain text with « and »' }).first()
+  await expect(passage).toBeVisible()
+  const marked = await passage.locator('mark').allTextContents()
+  expect(marked.length).toBeGreaterThan(0)
+  // A match is one word. The "and" between the document's own pair is not one.
+  for (const text of marked) expect(text).toMatch(/^[^\s«»]+$/)
+  expect(marked.map((text) => text.trim().toLowerCase())).not.toContain('and')
 })
 
 test('a search opened from a link runs as it was shared', async ({ page, browser }) => {
   await page.goto('/')
   await queryBox(page).fill(QUESTION)
   await page.getByRole('radio', { name: /Vector/ }).check()
-  await expect(results(page).first().getByRole('heading')).toHaveText('Glossary: Lease')
+  await expect(outcome(page)).toHaveText(/from vector search/)
+  const shown = await results(page).getByRole('heading').allTextContents()
   const link = page.url()
   expect(link).toContain('?q=what+happens+if+the+machine+dies+halfway+through+a+job&mode=vector')
 
-  // Someone else, in a browser of their own, opens the link.
+  // Someone else, in a browser of their own, opens the link, and sees the same list.
   const other = await (await browser.newContext()).newPage()
   await other.goto(link)
 
   await expect(queryBox(other)).toHaveValue(QUESTION)
   await expect(other.getByRole('radio', { name: /Vector/ })).toBeChecked()
-  await expect(results(other).first().getByRole('heading')).toHaveText('Glossary: Lease')
+  await expect(results(other).getByRole('heading')).toHaveText(shown)
   await expect(other).toHaveTitle(`${QUESTION} | fathom`)
   await other.context().close()
 })
@@ -167,20 +243,22 @@ test('a search opened from a link runs as it was shared', async ({ page, browser
 test('switching the retriever changes the results and the address, and Back undoes it', async ({ page }) => {
   await page.goto(address('/', QUESTION))
   const top = results(page).first().getByRole('heading')
-  await expect(top).toHaveText('ADR 5. Embedding happens after the write, in separate indexer processes: Consequences')
+  await expect(outcome(page)).toHaveText(/from hybrid search/)
 
   await page.getByRole('radio', { name: /Vector/ }).check()
   await expect(page).toHaveURL(/&mode=vector$/)
-  await expect(top).toHaveText('Glossary: Lease')
   await expect(outcome(page)).toHaveText(/^10 results from vector search/)
+  const byMeaning = await top.innerText()
 
   await page.getByRole('radio', { name: /Lexical/ }).check()
   await expect(page).toHaveURL(/&mode=lexical$/)
-  await expect(top).toHaveText('ADR 5. Embedding happens after the write, in separate indexer processes: Context')
+  await expect(outcome(page)).toHaveText(/from lexical search/)
+  // The example's claim: for this question each retriever puts a different passage first.
+  await expect(top).not.toHaveText(byMeaning)
 
   await page.goBack()
   await expect(page.getByRole('radio', { name: /Vector/ })).toBeChecked()
-  await expect(top).toHaveText('Glossary: Lease')
+  await expect(top).toHaveText(byMeaning)
 })
 
 test('the comparison shows the same query three ways', async ({ page }) => {
@@ -191,40 +269,42 @@ test('the comparison shows the same query three ways', async ({ page }) => {
   await expect(vector.getByRole('button')).toHaveCount(10)
   await expect(outcome(page)).toHaveText('Lexical returned 10 passages, vector 10 passages; 10 passages after fusion.')
 
-  // Each retriever has its own first choice.
-  await expect(lexical.getByRole('button').first()).toHaveAccessibleName(named('lexical rank 1', 'Context', 'ADR 5.'))
-  await expect(vector.getByRole('button').first()).toHaveAccessibleName(named('vector rank 1', 'Lease', 'Glossary'))
-
-  // Fusion's first choice is neither: it is the passage both rank third, and it starts out selected.
+  // The first fused result starts out selected, and its rows in the other two lists are marked with it.
   const top = fused.getByRole('button').first()
-  await expect(top).toHaveAccessibleName(
-    named('lexical rank 3', 'vector rank 3', 'fused rank 1', 'Consequences', 'ADR 5.'),
-  )
   await expect(top).toHaveAttribute('aria-pressed', 'true')
-  await expect(lexical.getByRole('button', { name: named('lexical rank 3', 'Consequences') })).toHaveClass(/\bon\b/)
-  await expect(vector.getByRole('button', { name: named('vector rank 3', 'Consequences') })).toHaveClass(/\bon\b/)
-
-  // The page works the score out from the two ranks, and the sum is the score the API sent.
-  await expect(worked(page).getByRole('heading', { level: 3 })).toHaveText(
-    'ADR 5. Embedding happens after the write, in separate indexer processes: Consequences',
+  const first = await rowOf(top)
+  if (first.lexical === null || first.vector === null) throw new Error('the first fused result has both ranks')
+  await expect(lexical.getByRole('button', { name: `lexical rank ${first.lexical}, ${first.passage}` })).toHaveClass(
+    /\bon\b/,
   )
-  await expect(worked(page).getByRole('row', { name: 'Lexical 3 1 / (10 + 3) = 0.0769' })).toBeVisible()
-  await expect(worked(page).getByRole('row', { name: 'Vector 3 1 / (10 + 3) = 0.0769' })).toBeVisible()
-  await expect(worked(page).getByRole('row', { name: 'Fused 1 0.1538' })).toBeVisible()
-
-  // The vector retriever's first choice shares no word with the question. The lexical retriever never returns it,
-  // one first place is worth less than two thirds, and it ends up further down the fused list.
-  const lease = fused.getByRole('button', { name: /Lease/ })
-  await expect(lease).toHaveAccessibleName(
-    named('not returned by the lexical retriever', 'vector rank 1', 'fused rank'),
+  await expect(vector.getByRole('button', { name: `vector rank ${first.vector}, ${first.passage}` })).toHaveClass(
+    /\bon\b/,
   )
-  await expect(lease).not.toHaveAccessibleName(/fused rank\s*1\s*,/)
-  await lease.click()
-  await expect(lease).toHaveAttribute('aria-pressed', 'true')
-  await expect(worked(page).getByRole('heading', { level: 3 })).toHaveText('Glossary: Lease')
+
+  // The page works the score out from the two ranks in that row. The total is the API's score, and it is what the
+  // two ranks add up to.
+  await expect(worked(page).getByRole('row', { name: `Lexical ${first.lexical} ${adds(first.lexical)}` })).toBeVisible()
+  await expect(worked(page).getByRole('row', { name: `Vector ${first.vector} ${adds(first.vector)}` })).toBeVisible()
+  const total = (1 / (10 + first.lexical) + 1 / (10 + first.vector)).toFixed(4)
+  await expect(worked(page).getByRole('row', { name: `Fused 1 ${total}` })).toBeVisible()
+  await expect(worked(page)).toContainText('Each figure is rounded to four places')
+
+  // A passage the lexical retriever never returned: the vector retriever's own first choice, which shares no word
+  // with the question. One first place is worth less than two places near the top, so it is not the first fused
+  // result, and its row has no line on the lexical side.
+  const alone = fused.getByRole('button', { name: /^not returned by the lexical retriever, vector rank 1, / })
+  await expect(alone).toHaveCount(1)
+  await expect(alone).not.toHaveAccessibleName(/fused rank 1,/)
+  const lone = await rowOf(alone)
+  await alone.click()
+  await expect(alone).toHaveAttribute('aria-pressed', 'true')
   await expect(worked(page).getByRole('row', { name: 'Lexical not in its top 50 0' })).toBeVisible()
-  await expect(worked(page).getByRole('row', { name: 'Vector 1 1 / (10 + 1) = 0.0909' })).toBeVisible()
-  await expect(lexical.getByRole('button', { name: /Lease/ })).toHaveCount(0)
+  await expect(worked(page).getByRole('row', { name: `Vector 1 ${adds(1)}` })).toBeVisible()
+  await expect(lexical.getByRole('button', { name: ending(lone.passage) })).toHaveCount(0)
+  // Pinning is announced: the section it rewrites is under the picture, out of a screen reader's view.
+  await expect(page.locator('[aria-live="polite"]').filter({ hasText: 'Worked out below' })).toContainText(
+    'Not returned by the lexical retriever, vector rank 1, fused rank',
+  )
 })
 
 test('each example query does what the page says it does', async ({ page }) => {
@@ -233,45 +313,54 @@ test('each example query does what the page says it does', async ({ page }) => {
   const first = (list: Locator): Locator => list.getByRole('button').first()
 
   // "No document contains any of these words, so the lexical retriever returns nothing and the vector retriever
-  // finds the entry by meaning."
+  // finds the entry by meaning." Room: none of the four words may appear in the documentation (ADR 9); the entry was
+  // the vector retriever's first choice when this was written and may be its third.
   await page.getByRole('button', { name: PARAPHRASE }).click()
   await expect(page).toHaveURL(/\/compare\?q=malicious\+javascript\+smuggled\+into\+a\+webpage$/)
   await expect(lexical.getByText('No passage shares a word with this query.')).toBeVisible()
   await expect(lexical.getByRole('button')).toHaveCount(0)
-  await expect(first(vector)).toHaveAccessibleName(named('vector rank 1', 'Cross-site scripting', 'Glossary'))
-  await expect(first(fused)).toHaveAccessibleName(
-    named('not returned by the lexical retriever', 'vector rank 1', 'fused rank 1', 'Cross-site scripting'),
+  const entry = fused.getByRole('button', { name: /, Cross-site scripting, Glossary$/ })
+  await expect(entry).toHaveAccessibleName(
+    /^not returned by the lexical retriever, vector rank [123], fused rank [123], /,
   )
 
-  // "One passage contains it, and the vector retriever does not have that passage in its first ten."
+  // "One passage contains it: the lexical retriever returns that passage and nothing else, and the vector retriever
+  // puts other passages first." Room: the passage was the vector retriever's 13th, and the claim holds down to 2nd.
   await page.getByRole('button', { name: NUMBER }).click()
   await expect(lexical.getByRole('button')).toHaveCount(1)
-  await expect(first(lexical)).toHaveAccessibleName(named('lexical rank 1', 'Relevance (passage 2)', 'fathom'))
-  await expect(first(fused)).toHaveAccessibleName(/lexical rank\s*1\s*,\s*vector rank\s*\d\d\s*,\s*fused rank\s*1\s*,/)
-  await expect(first(fused)).toHaveAccessibleName(named('Relevance (passage 2)', 'fathom'))
-  await expect(vector.getByRole('button')).toHaveCount(10)
-  await expect(vector.getByRole('button', { name: /Relevance.*fathom/ })).toHaveCount(0)
-  await expect(vector.getByText('other passages, down to rank 50')).toBeVisible()
+  const only = await rowOf(first(lexical))
+  expect(only.lexical).toBe(1)
+  expect(documentOf(only.passage)).toBe('Relevance, fathom')
+  const number = await rowOf(first(fused))
+  expect(number.passage).toBe(only.passage)
+  expect(number.lexical).toBe(1)
+  expect(number.vector === null || number.vector > 1).toBe(true)
+  expect((await rowOf(first(vector))).passage).not.toBe(only.passage)
 
-  // "Each retriever puts a different passage first, and fusion prefers one that both rank near the top."
+  // "Each retriever puts a different passage first, and the first fused result is one that both have in their first
+  // ten." Room: the fused winner had ranks 3 and 3; any pair up to 10 and 10 keeps the claim.
   await page.getByRole('button', { name: QUESTION }).click()
-  await expect(first(lexical)).toHaveAccessibleName(named('lexical rank 1', 'Context', 'ADR 5.'))
-  await expect(first(vector)).toHaveAccessibleName(named('vector rank 1', 'Lease', 'Glossary'))
-  await expect(first(fused)).toHaveAccessibleName(
-    /lexical rank\s*[2-5]\s*,\s*vector rank\s*[2-5]\s*,\s*fused rank\s*1\s*,\s*Consequences/,
-  )
+  await expect(fused.getByRole('button')).toHaveCount(10)
+  await expect(outcome(page)).toHaveText(/after fusion\.$/)
+  expect((await rowOf(first(lexical))).passage).not.toBe((await rowOf(first(vector))).passage)
+  const winner = await rowOf(first(fused))
+  expect(winner.lexical).not.toBeNull()
+  expect(winner.vector).not.toBeNull()
+  await expect(lexical.getByRole('button', { name: ending(winner.passage) })).toHaveCount(1)
+  await expect(vector.getByRole('button', { name: ending(winner.passage) })).toHaveCount(1)
 
-  // "The words are in the answer, and both retrievers put the same two documents on top."
+  // "The words are in the answer, and both retrievers put the same two documents on top." Room: the two are the
+  // glossary entry and the ADR's decision, whose titles are the query; their order may differ between the lists.
   await page.getByRole('button', { name: AGREED }).click()
-  const glossary = named('Reciprocal rank fusion', 'Glossary')
-  const decision = /Decision.*ADR 3\. Reciprocal rank fusion, in the application/
-  await expect(lexical.getByRole('button').nth(0)).toHaveAccessibleName(glossary)
-  await expect(lexical.getByRole('button').nth(1)).toHaveAccessibleName(decision)
-  await expect(vector.getByRole('button').nth(0)).toHaveAccessibleName(decision)
-  await expect(vector.getByRole('button').nth(1)).toHaveAccessibleName(glossary)
-  await expect(first(fused)).toHaveAccessibleName(
-    named('lexical rank 1', 'vector rank 2', 'fused rank 1', 'Reciprocal rank fusion', 'Glossary'),
-  )
+  await expect(outcome(page)).toHaveText(/after fusion\.$/)
+  await expect(first(fused)).toHaveAccessibleName(/Reciprocal rank fusion/)
+  const topTwo = async (list: Locator): Promise<string[]> =>
+    [
+      documentOf((await rowOf(list.getByRole('button').nth(0))).passage),
+      documentOf((await rowOf(list.getByRole('button').nth(1))).passage),
+    ].sort()
+  expect(await topTwo(lexical)).toEqual(await topTwo(vector))
+  expect(await topTwo(lexical)).toContain(documentOf((await rowOf(first(fused))).passage))
 })
 
 test('moving between the views keeps the query and puts focus on the new heading', async ({ page }) => {
@@ -289,11 +378,27 @@ test('moving between the views keeps the query and puts focus on the new heading
   await expect(results(page)).toHaveCount(10)
 })
 
+test('a view whose script is gone after a deploy is fetched by loading the page again', async ({ page }) => {
+  await page.goto(address('/', AGREED))
+  await expect(results(page).first()).toBeVisible()
+  // What a tab left open across a deploy runs into: the file it knows the other view by is no longer there. Once.
+  await page.route('**/assets/CompareView-*.js', (route) => route.abort(), { times: 1 })
+
+  await page.getByRole('link', { name: 'Compare' }).click()
+
+  // Without the reload the click would do nothing at all, and say nothing.
+  await expect(page).toHaveURL(/\/compare\?q=reciprocal\+rank\+fusion\+k$/)
+  await expect(page.getByRole('heading', { level: 1, name: 'Compare retrievers' })).toBeVisible()
+  await expect(column(page, 'Fused').getByRole('button')).toHaveCount(10)
+  // The note that guards against reloading for ever is cleared once a navigation has worked.
+  expect(await page.evaluate(() => sessionStorage.length)).toBe(0)
+})
+
 test('the index status says every chunk has a vector', async ({ page }) => {
   await page.goto('/')
 
   // The seed step does not let the stack report healthy while a chunk is still waiting.
-  await expect(indexStatus(page)).toHaveText(/^1\d\d documents in \d{3} chunks, all with vectors\.$/)
+  await expect(indexStatus(page)).toHaveText(/^\d+ documents in \d+ chunks, all with vectors\.$/)
 })
 
 test('the page never sends or receives an API key', async ({ page, context }) => {
@@ -389,9 +494,12 @@ test('a rate limit is explained, and the search can be repeated', async ({ page 
 
   // The limiter lets go: the same button now reaches the real API.
   await page.unroute(SEARCH)
-  await alert.getByRole('button', { name: 'Search again' }).click()
-  await expect(results(page).first().getByRole('heading')).toHaveText('Glossary: Reciprocal rank fusion')
+  await alert.getByRole('button', { name: 'Search again' }).focus()
+  await page.keyboard.press('Enter')
+  await expect(results(page).first().getByRole('heading')).toHaveText(/reciprocal rank fusion/i)
   await expect(alert).toHaveCount(0)
+  // The button went with the failure. Focus is in the query box, not on the page as a whole.
+  await expect(queryBox(page)).toBeFocused()
 })
 
 test('a server error is shown with the title and detail the API sent', async ({ page }) => {
