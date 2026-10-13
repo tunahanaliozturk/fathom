@@ -181,7 +181,7 @@ def _require(principal: Principal, scope: Literal["read", "write"], collection: 
 
 
 def build_app(max_payload_bytes: int, lifespan: Lifespan | None = None) -> FastAPI:
-    app = FastAPI(title="fathom", version="0.1.0", docs_url="/docs", redoc_url=None, lifespan=lifespan)
+    app = FastAPI(title="fathom", version="0.2.0", docs_url="/docs", redoc_url=None, lifespan=lifespan)
 
     @app.exception_handler(_Denied)
     async def denied(_: Request, exc: Exception) -> Response:
