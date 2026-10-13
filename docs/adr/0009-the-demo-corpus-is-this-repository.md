@@ -26,8 +26,10 @@ The script is safe to run again, and it runs on every `up`:
   `0 written, N unchanged`.
 - A section that an earlier run sent and that is no longer in the corpus is deleted. The list of what was sent is kept
   next to the proxy's key.
-- It exits only when the collection's `pending` count is 0. Compose starts the web container after the script has
-  finished, so `--wait` returns when every chunk has a vector and not before.
+- It exits only when the collection's `pending` count is 0 and one search with the proxy's key has succeeded. Compose
+  starts the web container after the script has finished, so `--wait` returns when every chunk has a vector and not
+  before. That one search can also be the slow one: the first search in a new API process took up to 4 seconds
+  here, against under 0.1 afterwards, and the first person to open the page should not be the one to wait.
 
 `test_a_file_becomes_one_document_per_section_that_has_text` and its neighbours in `tests/unit/test_seed.py` cover the
 splitting, and `test_the_committed_corpus_is_something_the_api_accepts` runs it over the real files.
@@ -35,8 +37,9 @@ splitting, and `test_the_committed_corpus_is_something_the_api_accepts` runs it 
 ## Consequences
 
 - At this commit that is 135 documents in 167 chunks. On the laptop in `docs/benchmark-results`, with the images
-  already built, a stack with an empty database was healthy 30 seconds after `docker compose up --wait`, 14 of them
-  spent embedding. A second run, while another build was using the machine, took 47 and 25.
+  already built, a stack with an empty database was healthy 30, 46 and 47 seconds after `docker compose up --wait` in
+  three runs, with 14 to 25 of those seconds spent embedding. The slower two ran while another build was using the
+  machine.
 - Editing the documentation changes what the demo returns. The four example queries on the page each make a claim
   about the result ("the lexical retriever returns nothing", "both put the same two passages on top"), and
   `web/e2e/journeys.spec.ts` asserts each claim against the real stack. An edit that makes one untrue fails CI, and the

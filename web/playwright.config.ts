@@ -9,6 +9,9 @@ export default defineConfig({
   forbidOnly: ci,
   retries: ci ? 1 : 0,
   reporter: ci ? [['github'], ['html', { open: 'never' }]] : 'list',
+  // Every new query is embedded by a model on the CPU, and the workers of two browsers ask at once. On a machine
+  // that is also building images, an answer took longer than the default five seconds once.
+  expect: { timeout: 10_000 },
   use: {
     baseURL: process.env.FATHOM_WEB_URL ?? 'http://127.0.0.1:8340',
     trace: 'retain-on-failure',

@@ -7,8 +7,9 @@ It runs once per `docker compose up`, inside the fathom image, as the `seed` ser
 2. Send every section of the corpus through the HTTP API with a write key that exists only while this runs. A section
    the API already has comes back `unchanged`, so a second run writes nothing.
 3. Delete what an earlier run sent and the corpus no longer contains.
-4. Wait until no chunk is waiting for a vector. Only then does this exit 0, and only then does compose start the
-   web container, so the first search a person makes already has both retrievers behind it.
+4. Wait until no chunk is waiting for a vector, then run one search with the read key. Only then does this exit 0, and
+   only then does compose start the web container, so the first search a person makes has both retrievers behind
+   it and is not the one that waits for the API process to run its model for the first time.
 
 Standard library only: the image has no HTTP client beyond it.
 """
@@ -180,7 +181,14 @@ def main() -> None:
         if time.monotonic() > deadline:
             sys.exit(f"the indexer did not finish in {args.timeout:.0f} s: {stats}")
         time.sleep(1)
-    print(f"ready: {stats}")
+
+    # The first search in a new API process can be slow (up to 4 seconds on a laptop, against under 0.1 afterwards).
+    # Paying for it here also proves that the key the proxy will use can search, not only count.
+    started = time.monotonic()
+    status, body = call("POST", f"{base}/search", read_key, {"query": "is the search ready", "k": 1})
+    if status != 200 or not body["hits"]:
+        sys.exit(f"a search with the read key failed: {status} {body}")
+    print(f"ready: {stats}, first search took {time.monotonic() - started:.1f} s")
 
 
 if __name__ == "__main__":

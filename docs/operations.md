@@ -14,7 +14,7 @@ The compose stack adds two things that are not part of the service:
 
 | service | what it does | how many |
 |---|---|---|
-| `seed` | `tools/seed.py`, in the fathom image: creates the console's read key, sends the demo corpus through the API, waits until `pending` is 0, exits | once per `docker compose up` |
+| `seed` | `tools/seed.py`, in the fathom image: creates the console's read key, sends the demo corpus through the API, waits until `pending` is 0, runs one search, exits | once per `docker compose up` |
 | `web` | nginx: serves the console and proxies two routes of the `demo` collection with that key | one |
 
 ## Configuration
