@@ -21,7 +21,9 @@ const terms = computed(() =>
 
 const source = computed(() => sourceOf(props.hit))
 
-const RULE = `Each retriever adds 1 / (${RRF_K} + rank). The sum is the score, and the scores decide the fused order.`
+// 1/13 is 0.0769 and 1/14 is 0.0714; their sum is 0.1484, not 0.1483. The page shows what the API sent and what each
+// rank adds, each to four places, and says so, instead of nudging a digit to make the column add up.
+const RULE = `Each retriever adds 1 / (${RRF_K} + rank). The sum is the score, and the scores decide the fused order. Each figure is rounded to four places, so the last digit of a sum can differ from that of its parts.`
 </script>
 
 <template>

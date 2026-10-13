@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onScopeDispose, ref, watch } from 'vue'
+import { onScopeDispose, ref, useTemplateRef, watch } from 'vue'
 
 import { QUERY_MAX } from '@/shared/api/modes'
 
@@ -33,13 +33,20 @@ function typed(): void {
 }
 
 onScopeDispose(() => clearTimeout(timer))
+
+// For the view around it: when the control that had focus is removed (an example that was chosen, a "Search again"
+// that worked), focus belongs here and not on the page as a whole.
+const field = useTemplateRef<HTMLInputElement>('field')
+defineExpose({ focus: () => field.value?.focus() })
 </script>
 
 <template>
   <form role="search" class="box" @submit.prevent="send">
     <label for="query">Query</label>
+    <!-- Leaving the box sends what is in it: a click on the other view within the pause would otherwise lose it. -->
     <input
       id="query"
+      ref="field"
       v-model="draft"
       type="search"
       name="q"
@@ -49,6 +56,7 @@ onScopeDispose(() => clearTimeout(timer))
       :maxlength="QUERY_MAX"
       aria-describedby="query-hint"
       @input="typed"
+      @blur="send"
     />
     <p id="query-hint">Results follow as you type. A question, a phrase or an exact identifier all work.</p>
   </form>

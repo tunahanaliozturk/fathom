@@ -50,6 +50,27 @@ const EMPTY: Record<Retriever, string> = {
 
 const hasLane = (retriever: Retriever): boolean => sides.value[retriever].some((link) => link.from === SHOWN)
 
+/** A long section is several passages, and each retriever may prefer a different one. */
+function shortNameOf(hit: Hit): string {
+  const { name } = labelOf(hit)
+  return hit.ordinal > 0 ? `${name} (passage ${hit.ordinal + 1})` : name
+}
+
+function cameFrom(hit: Hit, retriever: Retriever): string {
+  const rank = rankIn(hit, retriever)
+  return rank === null ? `not returned by the ${retriever} retriever` : `${retriever} rank ${rank}`
+}
+
+/** A row as a screen reader says it: where it ranked, then what it is. */
+function nameOf(column: 'lexical' | 'fused' | 'vector', hit: Hit, index: number): string {
+  const ranks =
+    column === 'fused'
+      ? [...RETRIEVERS.map((retriever) => cameFrom(hit, retriever)), `fused rank ${index + 1}`]
+      : [cameFrom(hit, column)]
+  const { within } = labelOf(hit)
+  return [...ranks, shortNameOf(hit), ...(within === '' ? [] : [within])].join(', ')
+}
+
 /** What is known about the pinned passage: its fused place if it has one, and its rank in each retriever. */
 const worked = computed(() => {
   const passage = pinned.value
@@ -69,6 +90,22 @@ const worked = computed(() => {
     lexical: lexical === undefined ? null : rankIn(lexical, 'lexical'),
     vector: vector === undefined ? null : rankIn(vector, 'vector'),
   }
+})
+
+// Pinning a row rewrites the section under the picture, which a screen reader user is not looking at. This one
+// sentence is announced when that happens.
+const announced = computed(() => {
+  const now = worked.value
+  if (now === null) return ''
+  const fused = now.position !== null
+  const ranks = RETRIEVERS.flatMap((retriever) => {
+    const rank = now[retriever]
+    if (rank !== null) return [`${retriever} rank ${rank}`]
+    // For a passage outside the fused list, a missing rank only means "not in that list's rows": say nothing.
+    return fused ? [`not returned by the ${retriever} retriever`] : []
+  })
+  const where = [...ranks, fused ? `fused rank ${now.position}` : 'not in the fused top ten'].join(', ')
+  return `Worked out below: ${now.hit.title}. ${where.charAt(0).toUpperCase()}${where.slice(1)}.`
 })
 
 const HEIGHT = (SHOWN + 1) * ROW
@@ -105,35 +142,23 @@ const HEIGHT = (SHOWN + 1) * ROW
               <FlowRow
                 :on="active === passageOf(hit)"
                 :pinned="pinned === passageOf(hit)"
+                :label="nameOf(column.name, hit, index)"
                 @pin="pinned = passageOf(hit)"
                 @point="(here) => point(passageOf(hit), here)"
               >
                 <template v-if="column.name === 'fused'">
                   <span v-for="retriever in RETRIEVERS" :key="retriever" :class="['came', retriever]">
-                    <template v-if="rankIn(hit, retriever) !== null">
-                      <span class="unseen">{{ retriever }} rank </span>{{ rankIn(hit, retriever) }}
-                    </template>
-                    <template v-else>
-                      <span class="unseen">not returned by the {{ retriever }} retriever</span>
-                      <span aria-hidden="true">none</span>
-                    </template>
-                    <span class="unseen">, </span>
+                    <template v-if="rankIn(hit, retriever) !== null">{{ rankIn(hit, retriever) }}</template>
+                    <span v-else class="absent">none</span>
                   </span>
-                  <span class="place"
-                    ><span class="unseen">fused rank </span>{{ index + 1 }}<span class="unseen">, </span></span
-                  >
+                  <span class="place">{{ index + 1 }}</span>
                 </template>
-                <span v-else class="rank">
-                  <span class="unseen">{{ column.name }} rank </span>{{ rankIn(hit, column.name)
-                  }}<span class="unseen">, </span>
-                </span>
+                <span v-else class="rank">{{ rankIn(hit, column.name) }}</span>
                 <span class="title">
-                  <!-- A long section is several passages, and each retriever may prefer a different one. -->
-                  <span class="name">
-                    {{ labelOf(hit).name }}<template v-if="hit.ordinal > 0"> (passage {{ hit.ordinal + 1 }})</template>
-                  </span>
-                  <span v-if="labelOf(hit).within !== ''" class="within">
-                    <span class="unseen">, </span>{{ labelOf(hit).within }}
+                  <!-- One line each, cut short when the column is narrow: the title attribute has the whole of it. -->
+                  <span class="name" :title="shortNameOf(hit)">{{ shortNameOf(hit) }}</span>
+                  <span v-if="labelOf(hit).within !== ''" class="within" :title="labelOf(hit).within">
+                    {{ labelOf(hit).within }}
                   </span>
                 </span>
               </FlowRow>
@@ -164,6 +189,7 @@ const HEIGHT = (SHOWN + 1) * ROW
     </template>
   </div>
 
+  <p class="unseen" aria-live="polite">{{ announced }}</p>
   <WorkedScore
     v-if="worked !== null"
     :hit="worked.hit"
@@ -325,7 +351,7 @@ li {
   text-align: right;
 }
 
-.fused .came [aria-hidden] {
+.fused .came .absent {
   font-family: var(--font-ui);
   font-size: 0.75rem;
   font-weight: 400;

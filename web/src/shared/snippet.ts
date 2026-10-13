@@ -6,17 +6,18 @@ export interface Part {
   match: boolean
 }
 
-// Innermost pairs only. A « or » that does not close properly may be part of the document (French quotation marks),
-// so it stays in the text as it is.
-const MATCH = /«([^«»]*)»/g
+// A match is one token: ts_headline wraps single words, numbers and identifiers, never a run with a space in it. So a
+// pair with a space inside, an empty pair, or a « that never closes is the document's own punctuation (French
+// quotation marks, or documentation about these very markers) and stays in the text as it is. What cannot be told
+// apart is a document that itself contains «word» with no space; that one is shown as a match (ADR 10).
+const MATCH = /«([^«»\s]+)»/g
 
 export function parts(snippet: string): Part[] {
   const found: Part[] = []
   let end = 0
   for (const match of snippet.matchAll(MATCH)) {
     if (match.index > end) found.push({ text: snippet.slice(end, match.index), match: false })
-    const inner = match[1] ?? ''
-    if (inner !== '') found.push({ text: inner, match: true })
+    found.push({ text: match[1] ?? '', match: true })
     end = match.index + match[0].length
   }
   if (end < snippet.length) found.push({ text: snippet.slice(end), match: false })

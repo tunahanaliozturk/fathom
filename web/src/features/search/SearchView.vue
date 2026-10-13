@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, useTemplateRef } from 'vue'
 import { useRouter } from 'vue-router'
 
 import type { Mode } from '@/shared/api/modes'
@@ -30,6 +30,21 @@ function address(q: string, mode: Mode) {
 const typed = (q: string) => void router.replace(address(q, props.mode))
 const picked = (q: string, mode: Mode) => void router.push(address(q, mode))
 
+// Two controls disappear when they have done their work: an example, with the list it was in, and "Search again",
+// with the failure it belonged to. Focus goes to the query box, not to nowhere.
+const box = useTemplateRef<{ focus: () => void }>('box')
+
+function example(q: string): void {
+  picked(q, props.mode)
+  box.value?.focus()
+}
+
+// The failure is taken down as soon as the search starts again, not when it ends, so focus moves now.
+function retry(): void {
+  box.value?.focus()
+  void refetch()
+}
+
 const hits = computed(() => data.value?.hits ?? [])
 
 // Drawn and announced: this line is a live region, and it is the only loading indicator there is.
@@ -48,7 +63,7 @@ const status = computed(() => {
 <template>
   <h1 tabindex="-1">Search</h1>
   <div class="controls">
-    <QueryBox :query="q" @search="typed" />
+    <QueryBox ref="box" :query="q" @search="typed" />
     <ModePicker :mode="mode" @pick="(next) => picked(q, next)" />
   </div>
 
@@ -59,24 +74,28 @@ const status = computed(() => {
       Type a query to search fathom's documentation. Each result shows where the lexical and the vector retriever ranked
       it, which is all that fusion looks at.
     </p>
-    <ExampleQueries @pick="(query) => picked(query, mode)" />
+    <ExampleQueries @pick="example" />
   </div>
-  <FailureNote v-else-if="error !== null" :failure="error" @retry="() => refetch()" />
-  <div v-else-if="data !== undefined && hits.length === 0" class="nothing">
+  <FailureNote v-else-if="error !== null" :failure="error" @retry="retry" />
+  <!-- While another mode or query is loading, `data` is still the previous answer. An empty previous answer says
+       nothing about the one on its way, so nothing is claimed until it arrives. -->
+  <div v-else-if="data !== undefined && hits.length === 0 && !isPlaceholderData" class="nothing">
     <h2>Nothing matched</h2>
-    <p v-if="mode === 'lexical'">
+    <p v-if="data.mode === 'lexical'">
       The lexical retriever needs at least one word in common with a document, after stemming. Try the vector or the
       hybrid retriever for the same query.
     </p>
     <p v-else>No passage in the collection has a vector yet, and none shares a word with the query.</p>
   </div>
+  <!-- Rows are described by the mode their answer came from (`data.mode`), which is not the mode in the address
+       while the next answer is loading. -->
   <ol
-    v-else-if="data !== undefined"
+    v-else-if="data !== undefined && hits.length > 0"
     :class="['results', { stale: isPlaceholderData }]"
     :aria-busy="isFetching"
     aria-label="Results"
   >
-    <ResultRow v-for="(hit, index) in hits" :key="passageOf(hit)" :hit="hit" :position="index + 1" :mode="mode" />
+    <ResultRow v-for="(hit, index) in hits" :key="passageOf(hit)" :hit="hit" :position="index + 1" :mode="data.mode" />
   </ol>
 </template>
 

@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { queryClient } from '@/shared/api/queries'
-import { found, hit, modeOf, network, problem, type Call } from '@/test/network'
+import { found, held, hit, modeOf, network, problem, queryOf, type Call } from '@/test/network'
 import { open } from '@/test/page'
 
 afterEach(() => {
@@ -123,7 +123,6 @@ describe('the comparison view', () => {
     expect(worked.getByRole('row', { name: 'Vector 2 1 / (10 + 2) = 0.0833' })).toBeTruthy()
     // The page's two terms add up to the score the API sent.
     expect(worked.getByRole('row', { name: 'Fused 1 0.1603' })).toBeTruthy()
-    expect((1 / 13 + 1 / 12).toFixed(4)).toBe('0.1603')
 
     const leaseRow = column('Fused').getByRole('button', { name: /Lease/ })
     await user.click(leaseRow)
@@ -133,6 +132,127 @@ describe('the comparison view', () => {
     expect(worked.getByRole('row', { name: 'Lexical not in its top 50 0' })).toBeTruthy()
     expect(worked.getByRole('row', { name: 'Vector 1 1 / (10 + 1) = 0.0909' })).toBeTruthy()
     expect(worked.getByRole('row', { name: 'Fused 3 0.0909' })).toBeTruthy()
+  })
+
+  it('says that its figures are rounded, because a sum can differ from its parts in the last digit', async () => {
+    // 1/13 + 1/14 = 0.14835...: the terms round to 0.0769 and 0.0714, which add up to 0.1483, and the sum to 0.1484.
+    answers.hybrid = () => found('hybrid', [{ ...crash, score: 1 / 13 + 1 / 14, ranks: { lexical: 3, vector: 4 } }])
+    network(threeWays)
+
+    await open('/compare?q=machine+dies')
+
+    const worked = within(await screen.findByRole('region', { name: 'How this passage was ranked' }))
+    expect(worked.getByRole('row', { name: 'Lexical 3 1 / (10 + 3) = 0.0769' })).toBeTruthy()
+    expect(worked.getByRole('row', { name: 'Vector 4 1 / (10 + 4) = 0.0714' })).toBeTruthy()
+    expect(worked.getByRole('row', { name: 'Fused 1 0.1484' })).toBeTruthy()
+    expect(worked.getByText(/Each figure is rounded to four places/)).toBeTruthy()
+  })
+
+  it('names each row in one phrase, and gives a name that may be cut short its full text', async () => {
+    network(threeWays)
+
+    await open('/compare?q=machine+dies')
+
+    await screen.findByRole('region', { name: 'Fused' })
+    const row = column('Fused').getByRole('button', {
+      name: 'lexical rank 3, vector rank 2, fused rank 1, Consequences, ADR 5',
+    })
+    expect(within(row).getByTitle('Consequences')).toBeTruthy()
+    expect(within(row).getByTitle('ADR 5')).toBeTruthy()
+    expect(
+      column('Fused').getByRole('button', {
+        name: 'not returned by the lexical retriever, vector rank 1, fused rank 3, Lease, Glossary',
+      }),
+    ).toBeTruthy()
+    expect(column('Lexical').getByRole('button', { name: 'lexical rank 1, Machine, Laptop run' })).toBeTruthy()
+    expect(column('Vector').getByRole('button', { name: 'vector rank 4, Context, ADR 1' })).toBeTruthy()
+  })
+
+  it('announces which passage is worked out when another row is pinned', async () => {
+    network(threeWays)
+    const user = userEvent.setup()
+    await open('/compare?q=machine+dies')
+    await screen.findByRole('region', { name: 'Fused' })
+
+    await user.click(column('Fused').getByRole('button', { name: /Lease/ }))
+
+    const said = screen.getByText(
+      'Worked out below: Glossary: Lease. Not returned by the lexical retriever, vector rank 1, fused rank 3.',
+    )
+    expect(said.getAttribute('aria-live')).toBe('polite')
+
+    await user.click(column('Lexical').getByRole('button', { name: /Machine/ }))
+    expect(said.textContent).toBe('Worked out below: Laptop run: Machine. Lexical rank 1, not in the fused top ten.')
+  })
+
+  it('keeps the last complete picture until all three answers to a new query are in', async () => {
+    const rest = held<undefined>()
+    let lexicalAnswered = false
+    network(async (call) => {
+      if (queryOf(call) !== 'second') return threeWays(call)
+      if (modeOf(call) === 'lexical') {
+        lexicalAnswered = true
+        return found('lexical', [{ ...lease, ranks: { lexical: 1 } }])
+      }
+      await rest.promise
+      return modeOf(call) === 'vector'
+        ? found('vector', [{ ...lease, ranks: { vector: 1 } }])
+        : found('hybrid', [{ ...lease, score: 2 / 11, ranks: { lexical: 1, vector: 1 } }])
+    })
+    const router = await open('/compare?q=machine+dies')
+    await screen.findByRole('region', { name: 'Fused' })
+
+    await router.push('/compare?q=second')
+    await waitFor(() => expect(lexicalAnswered).toBe(true))
+    await new Promise((resolve) => setTimeout(resolve, 30))
+
+    // One of three answers is in. Drawing it beside the old query's fused and vector lists would be a picture of
+    // no query at all, so the old picture stays, whole.
+    expect(screen.getByRole('status').textContent).toBe('Searching three ways.')
+    expect(column('Lexical').getAllByRole('button')).toHaveLength(2)
+    expect(column('Lexical').getByRole('button', { name: /Machine/ })).toBeTruthy()
+    expect(column('Fused').getAllByRole('button')).toHaveLength(3)
+
+    rest.release(undefined)
+
+    await waitFor(() => expect(column('Fused').getAllByRole('button')).toHaveLength(1))
+    expect(column('Lexical').getAllByRole('button')).toHaveLength(1)
+    expect(column('Lexical').getByRole('button', { name: /Lease/ })).toBeTruthy()
+    expect(column('Vector').getAllByRole('button')).toHaveLength(1)
+  })
+
+  it('does not say that nothing matched while the answers to a new query are still coming', async () => {
+    const rest = held<undefined>()
+    network(async (call) => {
+      if (queryOf(call) !== 'second') return found(modeOf(call), [])
+      await rest.promise
+      return threeWays(call)
+    })
+    const router = await open('/compare?q=anything')
+    await screen.findByRole('heading', { name: 'Nothing matched' })
+
+    await router.push('/compare?q=second')
+
+    await waitFor(() => expect(screen.getByRole('status').textContent).toBe('Searching three ways.'))
+    expect(screen.queryByRole('heading', { name: 'Nothing matched' })).toBeNull()
+
+    rest.release(undefined)
+    await screen.findByRole('region', { name: 'Fused' })
+  })
+
+  it('puts focus in the query box when a search is repeated: the button that had it is gone', async () => {
+    answers.vector = () => problem(503, 'Not ready', 'the database is unreachable')
+    network(threeWays)
+    const user = userEvent.setup()
+    await open('/compare?q=machine+dies')
+    const again = within(await screen.findByRole('alert')).getByRole('button', { name: 'Search again' })
+
+    Reflect.deleteProperty(answers, 'vector')
+    again.focus()
+    await user.keyboard('{Enter}')
+
+    await screen.findByRole('region', { name: 'Fused' })
+    expect(document.activeElement).toBe(screen.getByRole('searchbox', { name: 'Query' }))
   })
 
   it('says what is known about a passage that one retriever listed and fusion left out', async () => {
@@ -261,6 +381,19 @@ describe('the comparison view', () => {
 
     await screen.findByRole('region', { name: 'Fused' })
     expect(calls.map(modeOf).sort()).toEqual(['hybrid', 'lexical', 'vector', 'vector'])
+  })
+
+  it('goes back to waiting for a query when the box is cleared', async () => {
+    network(threeWays)
+    const user = userEvent.setup()
+    const router = await open('/compare?q=machine+dies')
+    await screen.findByRole('region', { name: 'Fused' })
+
+    await user.clear(screen.getByRole('searchbox', { name: 'Query' }))
+
+    await waitFor(() => expect(router.currentRoute.value.fullPath).toBe('/compare'))
+    expect(screen.queryByRole('region', { name: 'Fused' })).toBeNull()
+    expect(screen.getByRole('status').textContent).toBe('')
   })
 
   it('follows the query as it is typed and keeps it in the address', async () => {

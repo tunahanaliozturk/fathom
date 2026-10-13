@@ -83,6 +83,14 @@ export function held<T>(): { promise: Promise<T>; release: (value: T) => void } 
   return { promise, release }
 }
 
+/** The query a search request carried. */
+export function queryOf(call: Call): string {
+  const body = call.body
+  return typeof body === 'object' && body !== null && 'query' in body && typeof body.query === 'string'
+    ? body.query
+    : ''
+}
+
 /** The mode a search request asked for. */
 export function modeOf(call: Call): string {
   const body = call.body

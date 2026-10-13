@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, useTemplateRef } from 'vue'
 import { useRouter } from 'vue-router'
 
+import type { Hit } from '@/shared/api/fathom'
 import { useSearch } from '@/shared/api/queries'
 import ExampleQueries from '@/shared/ui/ExampleQueries.vue'
 import FailureNote from '@/shared/ui/FailureNote.vue'
@@ -27,14 +28,32 @@ const picked = (q: string) => void router.push(address(q))
 
 const failure = computed(() => all.map((one) => one.error.value).find((error) => error !== null) ?? null)
 const fetching = computed(() => all.some((one) => one.isFetching.value))
-const stale = computed(() => all.some((one) => one.isPlaceholderData.value))
-const retry = () => void Promise.all(all.filter((one) => one.error.value !== null).map((one) => one.refetch()))
 
-const lists = computed(() => {
+// "Search again" is taken down, with the failure, as soon as the search starts again; focus goes to the query box,
+// not to nowhere. Only the requests that failed are repeated.
+const box = useTemplateRef<{ focus: () => void }>('box')
+
+function retry(): void {
+  box.value?.focus()
+  for (const one of all) if (one.error.value !== null) void one.refetch()
+}
+
+// The three answers arrive one by one, and each query keeps its previous answer until its own arrives. A picture
+// made of whatever is there would join one query's lexical list to another query's fused list. So the picture is
+// built only from three answers to the same query, and until the next three are all in, the last one stays.
+const settled = computed(() => all.every((one) => one.data.value !== undefined && !one.isPlaceholderData.value))
+const stale = computed(() => !settled.value)
+
+interface Lists {
+  lexical: Hit[]
+  fused: Hit[]
+  vector: Hit[]
+}
+
+const lists = computed<Lists | null>((kept) => {
   const [l, f, v] = [lexical.data.value, fused.data.value, vector.data.value]
-  return l === undefined || f === undefined || v === undefined
-    ? null
-    : { lexical: l.hits, fused: f.hits, vector: v.hits }
+  if (!settled.value || l === undefined || f === undefined || v === undefined) return kept ?? null
+  return { lexical: l.hits, fused: f.hits, vector: v.hits }
 })
 
 const count = (n: number): string => (n === 1 ? '1 passage' : `${n} passages`)
@@ -56,16 +75,16 @@ const status = computed(() => {
     One query, run three ways. Left and right are what each retriever found by itself; the middle is what fusion made of
     the two. A line joins a fused result to the place it held in each list.
   </p>
-  <QueryBox :query="q" @search="typed" />
+  <QueryBox ref="box" :query="q" @search="typed" />
 
   <p class="status" role="status">{{ status }}</p>
 
   <FailureNote v-if="q !== '' && failure !== null" :failure="failure" @retry="retry" />
-  <div v-else-if="q !== '' && lists !== null && lists.fused.length === 0" class="nothing">
+  <div v-else-if="q !== '' && lists !== null && settled && lists.fused.length === 0" class="nothing">
     <h2>Nothing matched</h2>
     <p>Neither retriever returned a passage for this query.</p>
   </div>
-  <div v-else-if="q !== '' && lists !== null" :class="{ stale }" :aria-busy="fetching">
+  <div v-else-if="q !== '' && lists !== null && lists.fused.length > 0" :class="{ stale }" :aria-busy="fetching">
     <RankFlow :lexical="lists.lexical" :fused="lists.fused" :vector="lists.vector" />
   </div>
 

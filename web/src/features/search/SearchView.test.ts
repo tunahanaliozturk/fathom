@@ -8,10 +8,16 @@ import { found, held, hit, json, modeOf, network, problem } from '@/test/network
 import { at, input, open } from '@/test/page'
 
 afterEach(() => {
+  vi.useRealTimers()
   cleanup()
   queryClient.clear()
   vi.unstubAllGlobals()
 })
+
+/** With the clock held still: lets promises, the router and the query cache's zero-delay timers run to rest. */
+async function settle(): Promise<void> {
+  for (let round = 0; round < 5; round += 1) await vi.advanceTimersByTimeAsync(0)
+}
 
 const fusion = hit('fusion', {
   title: 'ADR 3. Reciprocal rank fusion: Decision',
@@ -74,20 +80,105 @@ describe('the search view', () => {
     expect(at(rows, 1).textContent).not.toContain('passage')
   })
 
-  it('searches at once on Enter, without waiting for the pause', async () => {
+  it('waits 300 ms after the last key before it searches, and Enter does not wait', async () => {
     const calls = network(() => found('hybrid', [fusion]))
-    const user = userEvent.setup()
     await open('/')
     const box = await screen.findByRole('searchbox', { name: 'Query' })
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
 
-    await user.type(box, 'fusion{Enter}')
-
-    // The pause is 300 ms; this does not wait that long.
-    await waitFor(() => expect(calls).toHaveLength(1), { timeout: 150 })
-    expect(await screen.findByRole('heading', { name: fusion.title })).toBeTruthy()
-    // And the timer that Enter overtook does not send the same query a second time.
-    await new Promise((resolve) => setTimeout(resolve, 400))
+    await user.type(box, 'fusion')
+    await vi.advanceTimersByTimeAsync(299)
+    await settle()
+    expect(calls).toHaveLength(0)
+    await vi.advanceTimersByTimeAsync(1)
+    await settle()
     expect(calls).toHaveLength(1)
+    expect(calls[0]?.body).toMatchObject({ query: 'fusion' })
+
+    await user.type(box, ' rank{Enter}')
+    await settle()
+    expect(calls).toHaveLength(2)
+    expect(calls[1]?.body).toMatchObject({ query: 'fusion rank' })
+    // The timer that Enter overtook does not send the same query a second time.
+    await vi.advanceTimersByTimeAsync(1000)
+    await settle()
+    expect(calls).toHaveLength(2)
+  })
+
+  it('puts focus in the query box when an example is chosen: the button that had it is gone', async () => {
+    network(() => found('hybrid', [fusion]))
+    const user = userEvent.setup()
+    await open('/')
+    const example = await screen.findByRole('button', { name: '0.6003' })
+
+    example.focus()
+    await user.keyboard('{Enter}')
+
+    await screen.findByRole('heading', { name: fusion.title })
+    expect(document.activeElement).toBe(screen.getByRole('searchbox', { name: 'Query' }))
+  })
+
+  it('puts focus in the query box when a search is repeated: the button that had it is gone', async () => {
+    let refuse = true
+    network(() => (refuse ? problem(503, 'Not ready', 'the database is unreachable') : found('hybrid', [fusion])))
+    const user = userEvent.setup()
+    await open('/?q=fusion')
+    const again = within(await screen.findByRole('alert')).getByRole('button', { name: 'Search again' })
+    const box = screen.getByRole('searchbox', { name: 'Query' })
+
+    // The failure, and its button, go as soon as the search starts again, whatever comes of it.
+    again.focus()
+    await user.keyboard('{Enter}')
+    expect(document.activeElement).toBe(box)
+    await screen.findByRole('alert')
+    expect(document.activeElement).toBe(box)
+
+    refuse = false
+    await user.click(within(screen.getByRole('alert')).getByRole('button', { name: 'Search again' }))
+
+    await screen.findByRole('heading', { name: fusion.title })
+    expect(document.activeElement).toBe(box)
+  })
+
+  it('does not describe an empty result of the previous mode in the words of the mode that is loading', async () => {
+    const next = held<Response>()
+    network((call) => (modeOf(call) === 'lexical' ? found('lexical', []) : next.promise))
+    const user = userEvent.setup()
+    await open('/?q=nothing+here&mode=lexical')
+    await screen.findByRole('heading', { name: 'Nothing matched' })
+
+    await user.click(screen.getByRole('radio', { name: /Vector/ }))
+
+    await waitFor(() => expect(status().textContent).toBe('Searching.'))
+    // Nothing is known about the vector search yet: it must not be said to have found nothing.
+    expect(screen.queryByRole('heading', { name: 'Nothing matched' })).toBeNull()
+    expect(screen.queryByText(/No passage in the collection has a vector yet/)).toBeNull()
+
+    next.release(found('vector', [lease]))
+    expect(await screen.findByRole('heading', { name: 'Glossary: Lease' })).toBeTruthy()
+  })
+
+  it('keeps describing the previous results as what they are while another mode loads', async () => {
+    const next = held<Response>()
+    network((call) =>
+      modeOf(call) === 'lexical' ? found('lexical', [{ ...fusion, ranks: { lexical: 1 } }]) : next.promise,
+    )
+    const user = userEvent.setup()
+    await open('/?q=fusion&mode=lexical')
+    await screen.findByRole('heading', { name: fusion.title })
+    expect(screen.getByText('not run')).toBeTruthy()
+
+    await user.click(screen.getByRole('radio', { name: /Hybrid/ }))
+
+    await waitFor(() => expect(status().textContent).toBe('Searching.'))
+    // The row on screen still comes from the lexical search, in which the vector retriever was not asked.
+    expect(screen.getByText('not run')).toBeTruthy()
+    expect(screen.queryByText('not in its top 50')).toBeNull()
+
+    next.release(found('hybrid', [fusion]))
+    await waitFor(() => expect(screen.queryByText('not run')).toBeNull())
+    expect(status().textContent).toBe('1 result from hybrid search in 12.3 ms.')
   })
 
   it('runs a search from the address alone, in the mode the address names', async () => {
