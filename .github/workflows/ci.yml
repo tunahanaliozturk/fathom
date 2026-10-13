@@ -36,6 +36,76 @@ jobs:
       - run: docker pull pgvector/pgvector:0.8.1-pg18
       - run: uv run pytest tests -q
 
+  contract:
+    name: OpenAPI document and generated types are what the code produces
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: astral-sh/setup-uv@v10.2.0
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version: 24
+      - run: uv sync --locked
+      - run: uv run python tools/openapi.py
+      - run: npm run generate:api
+        working-directory: web
+      - name: Fail if either file changed
+        run: git diff --exit-code
+
+  web-static:
+    name: web types, lint, format, licences, audit
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npm run type-check
+      - run: npm run lint
+      - run: npm run format:check
+      - run: npm run licences
+      - run: npm audit --audit-level=high
+
+  web-unit:
+    name: web unit and components (coverage thresholds)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npm run test:unit
+
+  web-budgets:
+    name: web build, bundle budget, Lighthouse
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npm run build
+      - run: npm run size
+      - run: npm run lighthouse
+
   relevance:
     name: relevance gate (SQuAD, real model, fails if nDCG@10 drops)
     runs-on: ubuntu-latest
@@ -73,7 +143,7 @@ jobs:
           path: eval-report.json
 
   vulnerabilities:
-    name: known vulnerabilities in dependencies and the image
+    name: known vulnerabilities in dependencies and the images
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7.0.1
@@ -87,17 +157,54 @@ jobs:
           severity: CRITICAL,HIGH
           ignore-unfixed: true
           exit-code: "1"
+      - run: docker build --tag fathom-web:scan web
+      - uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: fathom-web:scan
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"
 
   quickstart:
-    name: README quick start against the compose stack
+    name: README quick start, then the browser journeys, against the compose stack
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7.0.1
       - uses: astral-sh/setup-uv@v10.2.0
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
       - run: docker compose up --build --detach --wait --wait-timeout 600
       - name: Create a key and walk the quick start
         run: |
           key=$(docker compose run --rm --no-deps api keys create --collections '*' --scopes read,write | tail -1)
           uv run --no-project python tools/smoke.py "$key"
+      - name: The seed step is safe to run again
+        run: |
+          docker compose up --detach --wait --wait-timeout 300
+          docker compose logs seed | tail -2 | grep ": 0 written"
+      - name: The web image does not start without a key, or with something that is not one
+        run: |
+          if docker run --rm fathom-web:local; then echo "started with no key file"; exit 1; fi
+          docker volume create not-a-key
+          docker run --rm --user 0 --entrypoint sh --volume not-a-key:/keys fathom-web:local \
+            -c "echo 'fth_x\"; include /etc/passwd;' > /keys/read.key"
+          if docker run --rm --volume not-a-key:/run/fathom:ro fathom-web:local; then
+            echo "started with a file that is not a key"; exit 1
+          fi
+      - run: npm ci
+        working-directory: web
+      - run: npx playwright install --with-deps chromium firefox
+        working-directory: web
+      - run: npx playwright test
+        working-directory: web
       - if: failure()
         run: docker compose logs
+      - if: failure()
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: playwright-report
+          path: web/playwright-report
+          retention-days: 7
