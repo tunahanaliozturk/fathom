@@ -19,7 +19,10 @@ RUN apt-get update \
     && apt-get upgrade --yes --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* \
     && python -m pip uninstall --yes --quiet pip \
-    && useradd --system --uid 10001 --home-dir /app fathom
+    && useradd --system --uid 10001 --home-dir /app fathom \
+    && install --directory --owner fathom /var/lib/fathom
+# /var/lib/fathom is the one place the non-root user may write. Only the demo's seed step uses it, for the web proxy's
+# read key (ADR 8): a named volume mounted there takes this ownership the first time it is used.
 WORKDIR /app
 COPY --from=build /app/.venv /app/.venv
 COPY --from=build /models /models

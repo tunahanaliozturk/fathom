@@ -36,6 +36,76 @@ jobs:
       - run: docker pull pgvector/pgvector:0.8.1-pg18
       - run: uv run pytest tests -q
 
+  contract:
+    name: OpenAPI document and generated types are what the code produces
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: astral-sh/setup-uv@v10.2.0
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version: 24
+      - run: uv sync --locked
+      - run: uv run python tools/openapi.py
+      - run: npm run generate:api
+        working-directory: web
+      - name: Fail if either file changed
+        run: git diff --exit-code
+
+  web-static:
+    name: web types, lint, format, licences, audit
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npm run type-check
+      - run: npm run lint
+      - run: npm run format:check
+      - run: npm run licences
+      - run: npm audit --audit-level=high
+
+  web-unit:
+    name: web unit and components (coverage thresholds)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npm run test:unit
+
+  web-budgets:
+    name: web build, bundle budget, Lighthouse
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npm run build
+      - run: npm run size
+      - run: npm run lighthouse
+
   relevance:
     name: relevance gate (SQuAD, real model, fails if nDCG@10 drops)
     runs-on: ubuntu-latest
@@ -73,7 +143,7 @@ jobs:
           path: eval-report.json
 
   vulnerabilities:
-    name: known vulnerabilities in dependencies and the image
+    name: known vulnerabilities in dependencies and the images
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7.0.1
@@ -87,17 +157,78 @@ jobs:
           severity: CRITICAL,HIGH
           ignore-unfixed: true
           exit-code: "1"
+      - run: docker build --tag fathom-web:scan web
+      - uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: fathom-web:scan
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"
 
   quickstart:
-    name: README quick start against the compose stack
+    name: README quick start, then the browser journeys, against the compose stack
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7.0.1
       - uses: astral-sh/setup-uv@v10.2.0
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
       - run: docker compose up --build --detach --wait --wait-timeout 600
       - name: Create a key and walk the quick start
         run: |
           key=$(docker compose run --rm --no-deps api keys create --collections '*' --scopes read,write | tail -1)
           uv run --no-project python tools/smoke.py "$key"
+      - name: The seed step is safe to run again, and keeps the key it made
+        run: |
+          before=$(docker compose exec -T web sha256sum /run/fathom/read.key)
+          docker compose up --detach --wait --wait-timeout 300
+          docker compose logs seed | tail -2 | grep ": 0 written"
+          # Two runs, one key: the file the proxy reads is the same file. A changed digest would mean that each
+          # start mints a key, and that the running proxy holds a different one from the volume.
+          test "$before" = "$(docker compose exec -T web sha256sum /run/fathom/read.key)"
+      - name: The web image starts only with a file that is one key and nothing else
+        run: |
+          # The entrypoint has to stop by itself with exit 1. If nginx started, `timeout` ends the wait after 30
+          # seconds with 124, and that is a failure here, not six hours of a job that never returns.
+          refuses() {
+            set +e
+            timeout 30 docker run --rm "$@" fathom-web:local > refused.log 2>&1
+            code=$?
+            set -e
+            cat refused.log
+            test "$code" -eq 1
+          }
+          refuses
+          grep "read.key is missing" refused.log
+          # A good first line, then a line nginx would accept as configuration if the file were written out
+          # unchecked (it closes the header's quote and adds a directive). The check must look at the whole file.
+          docker volume create key-and-more
+          docker run --rm --user 0 --entrypoint sh --volume key-and-more:/keys fathom-web:local -c \
+            'printf "fth_0123456789abcdef_%043d\n\"; add_header X-Injected \"by the key file\" always; set \$x \"\n" 0 > /keys/read.key'
+          refuses --volume key-and-more:/run/fathom:ro
+          grep "does not hold an API key" refused.log
+      - name: The proxy's log does not record what people search for
+        run: |
+          curl --silent --show-error --output /dev/null "http://127.0.0.1:8340/?q=sentinel-7f3a9c-query"
+          curl --silent --show-error --output /dev/null \
+            --referer "http://127.0.0.1:8340/compare?q=sentinel-7f3a9c-query" http://127.0.0.1:8340/favicon.svg
+          docker compose logs web > web.log
+          grep '"GET /favicon.svg" 200' web.log
+          if grep sentinel-7f3a9c web.log; then echo "a query reached the log"; exit 1; fi
+      - run: npm ci
+        working-directory: web
+      - run: npx playwright install --with-deps chromium firefox
+        working-directory: web
+      - run: npx playwright test
+        working-directory: web
       - if: failure()
         run: docker compose logs
+      - if: failure()
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: playwright-report
+          path: web/playwright-report
+          retention-days: 7

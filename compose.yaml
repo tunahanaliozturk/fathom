@@ -1,5 +1,7 @@
-# Local stack: Postgres with pgvector, a one-shot migration, the API, and one indexer.
-# The password below is for this laptop stack only. API keys are created with `fathom keys create` (see README).
+# Local stack: Postgres with pgvector, a one-shot migration, the API, one indexer, a one-shot seed of the demo corpus,
+# and the browser console in front of the API.
+# The password below is for this laptop stack only. API keys are created with `fathom keys create` (see README); the
+# console's proxy gets its own read-only key from the seed step and nothing is committed (ADR 8).
 name: fathom
 
 x-fathom: &fathom
@@ -44,5 +46,41 @@ services:
     depends_on:
       migrate: {condition: service_completed_successfully}
 
+  # One shot (tools/seed.py): creates the proxy's read key, sends the demo corpus through the API, and exits once the
+  # indexer has embedded all of it. The corpus is the repository's own markdown plus corpus/ (ADR 9).
+  seed:
+    <<: *fathom
+    entrypoint: ["python", "/seed/seed.py"]
+    volumes:
+      - ./tools/seed.py:/seed/seed.py:ro
+      - ./README.md:/corpus/README.md:ro
+      - ./CHANGELOG.md:/corpus/CHANGELOG.md:ro
+      - ./CONTRIBUTING.md:/corpus/CONTRIBUTING.md:ro
+      - ./SECURITY.md:/corpus/SECURITY.md:ro
+      - ./docs:/corpus/docs:ro
+      - ./corpus:/corpus/corpus:ro
+      - web-key:/var/lib/fathom
+    depends_on:
+      api: {condition: service_healthy}
+      indexer: {condition: service_started}
+
+  # The console, and the one origin a browser talks to. nginx serves the built page and proxies two routes of one
+  # collection to the API, adding the read key the seed step left in the shared volume (web/nginx.conf).
+  web:
+    build: ./web
+    image: fathom-web:local
+    ports: ["127.0.0.1:8340:8080"]
+    volumes:
+      - web-key:/run/fathom:ro
+    depends_on:
+      api: {condition: service_healthy}
+      seed: {condition: service_completed_successfully}
+    healthcheck:
+      # Through the proxy, so healthy means the key was accepted and a search from the page will work.
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/api/v1/collections/demo/stats"]
+      interval: 5s
+      retries: 12
+
 volumes:
   postgres:
+  web-key:

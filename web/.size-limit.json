@@ -1,0 +1,26 @@
+[
+  {
+    "name": "entry: Vue, the router and the shell",
+    "path": ["dist/assets/index-*.js", "dist/assets/index-*.css"],
+    "gzip": true,
+    "limit": "42 kB"
+  },
+  {
+    "name": "first load of the search view: every script and style it fetches",
+    "path": [
+      "dist/assets/index-*",
+      "dist/assets/queries-*",
+      "dist/assets/IndexStatus-*",
+      "dist/assets/SnippetText-*",
+      "dist/assets/SearchView-*"
+    ],
+    "gzip": true,
+    "limit": "88 kB"
+  },
+  {
+    "name": "comparison view, on top of the above",
+    "path": ["dist/assets/CompareView-*"],
+    "gzip": true,
+    "limit": "6 kB"
+  }
+]

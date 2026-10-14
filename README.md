@@ -12,6 +12,36 @@ sync.
 
 What makes it more than a demo is that every ranking decision was measured, and is measured again on every push.
 
+## Try it in a browser
+
+Needs Docker, and nothing else: no key to create, nothing to paste.
+
+```sh
+docker compose up --build --wait
+```
+
+Then open <http://127.0.0.1:8340>. The stack indexes this repository's own documentation as a demo collection and
+waits until every chunk has a vector before it reports healthy.
+
+![The comparison view: one query run three ways, with lines from each retriever's list to the fused list](docs/images/compare.png)
+
+The page shows one thing: for the same query, what each retriever found, and how fusion turned two rankings into one.
+
+- **Search** returns results as you type, in the mode you pick, each with its rank in the lexical and in the vector
+  retriever. The query and the mode are the address, so a search is a link.
+- **Compare** runs the query three ways. A line joins each fused result to the place it held in each retriever's
+  list; a result one retriever never returned has no line on that side. Under the picture, the selected passage's score
+  is worked out: 1 / (10 + rank) from each retriever, added.
+- Four example queries are picked so that the retrievers disagree: a paraphrase that shares no word with its answer,
+  an exact number that only the lexical retriever puts first, a question each retriever answers differently, and one
+  where they agree.
+
+The browser never holds an API key. nginx, in the web container, adds a read-only key for that one collection, forwards
+two routes and refuses the rest, and limits how fast one address may search
+([ADR 8](docs/adr/0008-the-web-proxy-holds-the-read-key.md)). How the corpus gets there is
+[ADR 9](docs/adr/0009-the-demo-corpus-is-this-repository.md), and how the page is built is
+[ADR 10](docs/adr/0010-the-browser-client.md).
+
 ## Relevance
 
 SQuAD 1.1 as a retrieval task: find the one paragraph that answers each question. Full method and every experiment in
@@ -56,9 +86,10 @@ On a laptop (Core Ultra 7 255H, Postgres in Docker Desktop), 11,122 chunks, 16 c
 Plus about 19 ms to embed the query. The model is the slow part of indexing: about 18 paragraphs a second per indexer
 process on that laptop, which is why writes never wait for it.
 
-## Quick start
+## Quick start with the API
 
-Needs Docker. The image carries the model, so nothing is downloaded at run time.
+Needs Docker. The image carries the model, so nothing is downloaded at run time. The API listens on
+<http://127.0.0.1:8300>.
 
 ```sh
 docker compose up --build --wait
@@ -117,6 +148,15 @@ sequenceDiagram
 | A key reaches only its collections and scopes; revoked keys stop working | `test_a_key_reaches_only_its_collections_and_scopes`, `test_a_revoked_key_stops_working` |
 | A metadata filter applies inside both retrievers | `test_a_metadata_filter_applies_to_both_retrievers` |
 | Chunks never exceed their budget and lose no words | `test_no_chunk_exceeds_the_budget_and_no_word_is_lost` (Hypothesis) |
+| The browser never sends or receives an API key | `the page never sends or receives an API key` (Playwright, real stack) |
+| The proxy forwards two routes of one collection, refuses the rest, limits the rate, and sends the same security headers with every answer | the eight tests in `web/e2e/proxy.spec.ts` |
+| The web container starts only with a key file that is one key and nothing else | `test_a_good_first_line_does_not_let_a_second_line_into_the_configuration`, and a CI step against the image |
+| The seed step deletes what left the corpus, keeps the proxy's key, and revokes its own | `tests/unit/test_seed_run.py` |
+| What people search for is not written to the proxy's log | the `quickstart` CI job sends a marked query and looks for it |
+| Text from a document is shown as text, never run | `shows markup inside a document as text and never builds an element from it` |
+| A change to a response field fails the build | the `contract` CI job and the type-check ([ADR 10](docs/adr/0010-the-browser-client.md)) |
+| A query that has been replaced has its request cancelled | `cancels the request for a query that has been replaced` |
+| Each example query on the page does what the page says | `each example query does what the page says it does` (Playwright, real stack) |
 
 Before the first release, a review set on breaking it found eleven problems; each fix came with one of the tests above.
 
@@ -131,6 +171,41 @@ uv run pytest tests                      # needs Docker: pgvector runs in a cont
 uv run python tools/license_audit.py     # every installed distribution must be permissively licensed
 ```
 
+The console has its own, in `web/` (Node 24):
+
+```sh
+npm ci
+npm run type-check && npm run lint && npm run format:check
+npm run test:unit                        # Vitest and Testing Library; fails below the coverage it holds today
+npm run build && npm run size            # fails above the bundle budgets
+npm run lighthouse                       # fails below performance 0.95 or accessibility 1.0
+npm run licences && npm audit --audit-level=high
+npx playwright install chromium firefox
+npx playwright test                      # needs the compose stack up: the real API, model and corpus
+```
+
+And one check that spans both: the OpenAPI document and the types generated from it must be what the code produces.
+
+```sh
+uv run python tools/openapi.py && npm --prefix web run generate:api && git diff --exit-code
+```
+
+### The console, measured
+
+Measured on 2026-10-14 on the laptop in [the benchmark run](docs/benchmark-results/2026-10-04-laptop.md). Lighthouse
+has not been run on a CI runner.
+
+| | measured | the build fails beyond |
+|---|---|---|
+| First load of the search view, script and style, gzip (`npm run size`) | 80.5 kB | 88 kB |
+| Comparison view, added to that | 5.3 kB | 6 kB |
+| Lighthouse performance, built page, mobile profile, simulated throttling, each of 3 runs | 0.99 | 0.95 at the median |
+| Lighthouse accessibility, same runs | 1.0 | 1.0 |
+| Largest contentful paint, same runs | 1.90, 1.88 and 1.88 s | 2.5 s at the median |
+| Cumulative layout shift, same runs | 0 | 0.1 |
+| Unit and component tests (`npm run test:unit`) | 86, covering 98.94% of statements and 93.44% of branches | 98% and 93% |
+| Journeys against the compose stack (`npx playwright test`) | 26 in Chromium, 26 in Firefox, 8 against the proxy | any failure, any axe violation |
+
 ## Limitations
 
 - English only (the `english` text search configuration and an English model).
@@ -138,11 +213,14 @@ uv run python tools/license_audit.py     # every installed distribution must be 
 - Vectors lag writes by however long the indexers take; text search covers the gap.
 - SQuAD questions share vocabulary with their answers, which flatters lexical search. The numbers compare versions of
   this system; they are not a claim about other data.
+- The console's proxy makes one collection readable by anyone who can reach its port. That suits a demo of public
+  documentation and nothing private (ADR 8). The console is read-only, light theme only, and shows ten results.
 
 [docs/operations.md](docs/operations.md) has the configuration table, what to watch, and the runbooks.
 
 ## Licence
 
 MIT for the code. The evaluation downloads SQuAD 1.1 (CC BY-SA 4.0) at run time and never stores it in the repository.
-The default model, `BAAI/bge-small-en-v1.5`, is MIT. Every Python dependency, at every depth, is permissively licensed,
-and CI checks it.
+The demo corpus is this repository's own documentation and `corpus/glossary.md`, both MIT. The default model,
+`BAAI/bge-small-en-v1.5`, is MIT. Every Python and npm dependency, at every depth, is permissively licensed, and CI
+checks both.
